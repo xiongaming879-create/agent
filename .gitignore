@@ -1,0 +1,8 @@
+node_modules/
+dist/
+*.db
+workspace/
+.env
+.playwright-mcp/
+.vscode/
+server/data/
