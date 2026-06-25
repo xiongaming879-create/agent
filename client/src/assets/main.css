@@ -1,0 +1,192 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: var(--base-font-size, 14px);
+  background: #050505;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+#app {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.15);
+}
+
+textarea:focus,
+input:focus,
+select:focus {
+  outline: none;
+  box-shadow: none;
+}
+
+button:focus-visible,
+[tabindex]:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.15);
+  border-radius: inherit;
+}
+
+@keyframes blink {
+  0%, 50% { opacity: 1; }
+  51%, 100% { opacity: 0; }
+}
+
+.animate-blink {
+  animation: blink 1s infinite;
+}
+
+.markdown-body p {
+  margin-bottom: 0.5em;
+  color: rgba(255, 255, 255, 0.8);
+}
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.markdown-body ul, .markdown-body ol {
+  padding-left: 1.5em;
+  margin-bottom: 0.5em;
+}
+.markdown-body li {
+  margin-bottom: 0.25em;
+}
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4 {
+  font-weight: 600;
+  margin-top: 0.75em;
+  margin-bottom: 0.5em;
+  color: rgba(255, 255, 255, 0.9);
+}
+.markdown-body h1 { font-size: 1.25em; }
+.markdown-body h2 { font-size: 1.125em; }
+.markdown-body h3 { font-size: 1em; }
+.markdown-body blockquote {
+  border-left: 3px solid rgba(255, 255, 255, 0.1);
+  padding-left: 0.75em;
+  color: rgba(255, 255, 255, 0.4);
+  margin-bottom: 0.5em;
+}
+.markdown-body table {
+  border-collapse: collapse;
+  margin-bottom: 0.5em;
+  font-size: 0.875em;
+}
+.markdown-body th, .markdown-body td {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  padding: 0.375em 0.75em;
+}
+.markdown-body th {
+  background: rgba(255, 255, 255, 0.04);
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+}
+.markdown-body a {
+  color: rgba(255, 255, 255, 0.6);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: opacity 0.15s;
+}
+.markdown-body a:hover {
+  opacity: 0.7;
+}
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  margin: 0.75em 0;
+}
+.markdown-body img {
+  max-width: 100%;
+}
+.markdown-body code:not(.hljs) {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.125em 0.375em;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  font-size: 0.875em;
+  font-family: 'Menlo', 'Consolas', monospace;
+  color: rgba(255, 255, 255, 0.85);
+}
+.markdown-body .hljs-pre {
+  position: relative;
+  background: #0A0A0A;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 1em;
+  margin-bottom: 0.5em;
+  overflow-x: auto;
+  cursor: pointer;
+}
+.markdown-body .hljs-pre:hover::after {
+  content: '点击复制';
+  position: absolute;
+  top: 0.375em;
+  right: 0.5em;
+  font-size: 0.75em;
+  color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.125em 0.5em;
+  border-radius: 3px;
+}
+.markdown-body .hljs-pre code {
+  font-size: 0.8125em;
+  font-family: 'Menlo', 'Consolas', monospace;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+.hljs { color: #e0e0e0; background: transparent; }
+.hljs-keyword { color: #ff7b72; }
+.hljs-string { color: #a5d6ff; }
+.hljs-number { color: #79c0ff; }
+.hljs-comment { color: #8b949e; font-style: italic; }
+.hljs-function { color: #d2a8ff; }
+.hljs-title { color: #d2a8ff; }
+.hljs-params { color: #e0e0e0; }
+.hljs-built_in { color: #ffa657; }
+.hljs-literal { color: #79c0ff; }
+.hljs-type { color: #ffa657; }
+.hljs-attr { color: #79c0ff; }
+.hljs-selector-tag { color: #7ee787; }
+.hljs-selector-class { color: #d2a8ff; }
+.hljs-selector-id { color: #ffa657; }
+.hljs-variable { color: #ffa657; }
+.hljs-meta { color: #8b949e; }
+.hljs-tag { color: #7ee787; }
+.hljs-name { color: #7ee787; }
+.hljs-attribute { color: #79c0ff; }
+.hljs-symbol { color: #79c0ff; }
+.hljs-regexp { color: #a5d6ff; }
+.hljs-addition { color: #aff5b4; background: rgba(63, 185, 80, 0.15); }
+.hljs-deletion { color: #ffdcd7; background: rgba(248, 81, 73, 0.15); }
+
+input::placeholder, textarea::placeholder {
+  color: rgba(255, 255, 255, 0.2);
+}
+::selection {
+  background: rgba(255, 255, 255, 0.12);
+}
