@@ -4,15 +4,16 @@ import { ChatAnthropic } from '@langchain/anthropic'
 import { createReactAgent } from '@langchain/langgraph/prebuilt'
 import { wrapAllTools } from './tool-adapter'
 import { langchainAgentRunner } from './langchain-adapter'
+import { buildMemoryContext } from './memory-recall'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
 }
 
-const ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || ''
+const ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || ''
 const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com'
-const MODEL = process.env.AGENT_MODEL || 'maas-glm-5.1-zhipu'
+const MODEL = process.env.AGENT_MODEL || 'deepseek-v4-flash'
 const USE_LANGCHAIN = process.env.USE_LANGCHAIN !== 'false'
 
 const MAX_ITERATIONS = 25
@@ -43,6 +44,7 @@ function createLangchainAgent(systemPrompt?: string) {
     modelName: MODEL,
     anthropicApiUrl: ANTHROPIC_BASE_URL,
     anthropicApiKey: ANTHROPIC_AUTH_TOKEN,
+    temperature: 0,
     streaming: true,
     maxTokens: 4096,
   })
@@ -89,6 +91,11 @@ function createLangchainAgent(systemPrompt?: string) {
 - 代码使用带语言标识的代码块（如 \`\`\`python）
 - 基于工具返回内容组织回答，不要编造
 - 无法确定时明确说明，不要猜测
+- 只基于提供的知识库、工具返回结果、上下文信息回答，**严禁编造任何未提及的信息**。
+- 不知道、不确定、没有相关信息时，直接回答「暂无相关信息」，**不许猜测、不许编数据、不许编例子**。
+- 所有事实性内容必须标注来源：【来源：xxx】，无来源则不输出。
+- 禁止虚构人名、地名、时间、数据、文件、链接、政策、代码逻辑。
+- 如果问题超出知识库范围，拒绝回答，不做延伸联想。
 
 ## 思考过程
 - 简洁聚焦：分析问题 → 判断信息是否充分 → 选择工具 → 解读结果
@@ -97,6 +104,7 @@ function createLangchainAgent(systemPrompt?: string) {
 Available tools:
 ${toolList}
 ${systemPrompt ? `\n${systemPrompt}` : ''}`
+${buildMemoryContext()}
 
   return createReactAgent({ llm, tools: lcAllTools, prompt: systemContent })
 }
@@ -158,7 +166,7 @@ interface StreamChunk { blockType: 'thinking' | 'text'; text: string }
 async function* streamAnthropic(messages: ChatMessage[], systemPrompt: string): AsyncGenerator<StreamChunk> {
   const url = `${ANTHROPIC_BASE_URL}/v1/messages`
   const body: Record<string, unknown> = {
-    model: MODEL, max_tokens: 4096, stream: true, messages, system: systemPrompt,
+    model: MODEL, max_tokens: 4096, temperature: 0, stream: true, messages, system: systemPrompt,
   }
   const res = await fetch(url, {
     method: 'POST',
@@ -263,7 +271,8 @@ Answer: <最终答案>
 - 避免重复已有信息，避免冗长推理
 
 Available tools:
-${toolList}`
+${toolList}
+${buildMemoryContext()}`
 }
 
 async function* runAgentLegacy(
@@ -367,6 +376,63 @@ async function* runAgentLegacy(
   yield { type: 'done' }
 }
 
+// --- Fact-check validation ---
+
+interface ValidationResult {
+  valid: boolean
+  reason?: string
+}
+
+async function validateAnswer(answer: string, observations: string[]): Promise<ValidationResult> {
+  if (!answer.trim() || observations.length === 0) return { valid: true }
+
+  const judgePrompt = `你是一个严格的事实核查员。判断以下 AI 回答是否完全基于提供的工具执行结果。
+
+## 工具执行结果（观察数据）
+${observations.map((o, i) => `--- 观察 ${i + 1} ---\n${o.slice(0, 800)}`).join('\n\n')}
+
+## AI 回答
+${answer}
+
+## 核查要求
+1. 回答中的每个事实性断言是否都能在观察数据中找到依据？
+2. 回答是否引用了未在观察数据中出现的来源、网址、文件名、数据？
+3. 回答是否编造了具体数字、人名、地名、文件路径？
+4. 回答是否对数据做了超出范围的延伸？
+
+## 输出格式
+如果回答完全基于观察数据，输出：是
+如果存在编造或无法被观察数据支持的内容，输出：否，并在下一行简要说明问题`
+
+  try {
+    const url = `${ANTHROPIC_BASE_URL}/v1/messages`
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': ANTHROPIC_AUTH_TOKEN,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        max_tokens: 512,
+        temperature: 0,
+        messages: [{ role: 'user', content: judgePrompt }],
+      }),
+    })
+    if (!res.ok) return { valid: true } // 校验失败时放行，避免阻断正常回答
+
+    const data = (await res.json()) as { content: Array<{ type: string; text: string }> }
+    const text = data.content?.map(c => c.text).join('') || ''
+    const firstLine = text.trim().split('\n')[0].trim()
+    const isValid = firstLine === '是'
+    const reason = !isValid ? text.replace(/^否\s*\n?/, '').trim() : undefined
+    return { valid: isValid, reason }
+  } catch {
+    return { valid: true }
+  }
+}
+
 // Public API — switches between LangChain and legacy
 export async function* runAgent(
   messages: ChatMessage[],
@@ -375,9 +441,36 @@ export async function* runAgent(
 ): AsyncGenerator<AgentEvent> {
   const options = typeof thirdArg === 'string' ? { systemPrompt: thirdArg } as AgentOptions : thirdArg
   console.log(`[Agent] Using ${USE_LANGCHAIN ? 'LangChain' : 'legacy'} implementation`)
-  if (USE_LANGCHAIN) {
-    yield* runAgentLangchain(messages, options)
-  } else {
-    yield* runAgentLegacy(messages, _tools, thirdArg)
+
+  const inner = USE_LANGCHAIN
+    ? runAgentLangchain(messages, options)
+    : runAgentLegacy(messages, _tools, thirdArg)
+
+  let allContent = ''
+  const allObservations: string[] = []
+
+  for await (const event of inner) {
+    if (event.type === 'done') {
+      break // 先不 yield done，等校验完
+    }
+    if (event.type === 'observation') {
+      allObservations.push(event.content)
+    }
+    if (event.type === 'content_delta' || event.type === 'content') {
+      allContent += event.content
+    }
+    yield event
   }
+
+  // 后置校验：检查回答是否编造了未基于工具结果的内容
+  if (allContent.trim() && allObservations.length > 0) {
+    const result = await validateAnswer(allContent, allObservations)
+    if (!result.valid) {
+      console.warn(`[Agent] Fact-check failed: ${result.reason}`)
+      yield { type: 'thought', content: `【事实核查】回答中存在未基于工具结果的内容：${result.reason || '编造事实'}` }
+      yield { type: 'content', content: '暂无相关信息' }
+    }
+  }
+
+  yield { type: 'done' }
 }
