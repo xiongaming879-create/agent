@@ -103,8 +103,8 @@ function createLangchainAgent(systemPrompt?: string) {
 
 Available tools:
 ${toolList}
-${systemPrompt ? `\n${systemPrompt}` : ''}`
-${buildMemoryContext()}
+${systemPrompt ? `\n${systemPrompt}` : ''}
+${buildMemoryContext()}`
 
   return createReactAgent({ llm, tools: lcAllTools, prompt: systemContent })
 }

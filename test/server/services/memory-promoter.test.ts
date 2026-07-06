@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import {
   initMemoryDb,
   resetMemoryDb,
@@ -9,17 +11,13 @@ import {
 } from '../../../server/src/db/memory-db'
 import { promoteCandidates } from '../../../server/src/services/memory-promoter'
 
-const TEST_DB = `/tmp/memory-test-${process.pid}.db`
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const TEST_DB = path.resolve(__dirname, '../../../server/data/memory-promoter-test.db')
 process.env.MEMORY_DB_PATH = TEST_DB
 process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
 process.env.ANTHROPIC_BASE_URL = 'https://api.test.com'
 process.env.AGENT_MODEL = 'test-model'
-
-function setupDb() {
-  if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
-  resetMemoryDb()
-  return initMemoryDb()
-}
 
 describe('Memory Promoter — promoteCandidates', () => {
   beforeEach(async () => {
@@ -136,4 +134,9 @@ describe('Memory Promoter — promoteCandidates', () => {
     expect(rules[0].rule).toContain('测试规则写入')
     expect(rules[0].supporting_conversations).toContain('conv-a')
   })
+})
+
+afterAll(() => {
+  resetMemoryDb()
+  if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
 })

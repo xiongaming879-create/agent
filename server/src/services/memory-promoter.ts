@@ -28,44 +28,73 @@ export async function promoteCandidates(): Promise<{ promoted: number; kept: num
   }
 
   // Multiple candidates: try LLM merge first
-  let mergedCandidates: Candidate[]
+  let mergedResults: MergedResult[] | null = null
   try {
-    const merged = await llmMergeCandidates(candidates)
-    if (merged && merged.length > 0) {
-      mergedCandidates = merged as Candidate[]
-    } else {
-      mergedCandidates = candidates
-    }
+    mergedResults = await llmMergeCandidates(candidates)
   } catch {
-    mergedCandidates = candidates
+    mergedResults = null
   }
 
-  // Group merged candidates by statement to avoid duplicate promotions
-  const groups = groupByStatement(mergedCandidates)
+  const useMerged = mergedResults && mergedResults.length > 0
 
   let promoted = 0
   let kept = 0
   const promotedIds = new Set<string>()
 
-  for (const group of groups) {
-    const result = evaluateGroup(group)
-    if (result) {
-      createRule(result)
-      // Mark all original candidates that belong to this group as promoted
-      for (const gc of group) {
-        const originals = candidates.filter(
-          orig => orig.statement === gc.statement || orig.id === gc.id
-        )
-        for (const orig of originals) {
-          if (!promotedIds.has(orig.id)) {
-            markCandidatePromoted(orig.id)
-            promotedIds.add(orig.id)
-          }
+  if (useMerged) {
+    // Use LLM merged results with proper member_ids tracking
+    for (const merged of mergedResults!) {
+      // Reconstruct full conversation set from member_ids
+      const memberConversations = new Set<string>()
+      for (const mid of merged.member_ids) {
+        const orig = candidates.find(c => c.id === mid)
+        if (orig) memberConversations.add(orig.conversation_id)
+      }
+      // Fallback: if no member_ids, use the comma-joined conversation_id
+      if (memberConversations.size === 0) {
+        for (const cid of merged.conversation_id.split(',')) {
+          if (cid) memberConversations.add(cid)
         }
       }
-      promoted++
-    } else {
-      kept++
+
+      const result = evaluateMergedGroup(
+        merged.statement,
+        merged.type,
+        merged.durable,
+        Array.from(memberConversations)
+      )
+      if (result) {
+        createRule(result)
+        // Mark all original candidates that contributed to this merged result
+        for (const mid of merged.member_ids) {
+          if (!promotedIds.has(mid)) {
+            markCandidatePromoted(mid)
+            promotedIds.add(mid)
+          }
+        }
+        promoted++
+      } else {
+        kept++
+      }
+    }
+  } else {
+    // No LLM merge — use statement-based grouping on original candidates
+    const groups = groupByStatement(candidates)
+
+    for (const group of groups) {
+      const result = evaluateGroup(group)
+      if (result) {
+        createRule(result)
+        for (const gc of group) {
+          if (!promotedIds.has(gc.id)) {
+            markCandidatePromoted(gc.id)
+            promotedIds.add(gc.id)
+          }
+        }
+        promoted++
+      } else {
+        kept++
+      }
     }
   }
 
@@ -128,9 +157,63 @@ function evaluateGroup(group: Candidate[]): {
   return null
 }
 
+function evaluateMergedGroup(
+  statement: string,
+  type: string,
+  durable: number,
+  conversationIds: string[]
+): {
+  kind: 'user_preference_rule' | 'project_rule' | 'stable_fact'
+  rule: string
+  promotion_reason: 'cross_session' | 'failure_evidence' | 'explicit'
+  supporting_conversations: string[]
+} | null {
+  const conversations = new Set(conversationIds)
+
+  // Priority 1: cross_session (≥2 different conversations)
+  if (conversations.size >= 2) {
+    return {
+      kind: 'user_preference_rule',
+      rule: statement,
+      promotion_reason: 'cross_session',
+      supporting_conversations: Array.from(conversations),
+    }
+  }
+
+  // Priority 2: failure_evidence (type=lesson)
+  if (type === 'lesson') {
+    return {
+      kind: 'stable_fact',
+      rule: statement,
+      promotion_reason: 'failure_evidence',
+      supporting_conversations: Array.from(conversations),
+    }
+  }
+
+  // Priority 3: explicit (durable=1)
+  if (durable === 1) {
+    return {
+      kind: 'user_preference_rule',
+      rule: statement,
+      promotion_reason: 'explicit',
+      supporting_conversations: Array.from(conversations),
+    }
+  }
+
+  return null
+}
+
+interface MergedResult {
+  conversation_id: string
+  type: string
+  statement: string
+  durable: number
+  member_ids: string[]
+}
+
 async function llmMergeCandidates(
   candidates: Candidate[]
-): Promise<Array<{ conversation_id: string; type: string; statement: string; durable: number }> | null> {
+): Promise<MergedResult[] | null> {
   const url = `${ANTHROPIC_BASE_URL}/v1/messages`
 
   const candidateList = candidates.map(c => ({
@@ -152,11 +235,12 @@ async function llmMergeCandidates(
 - type: "user_preference" | "fact" | "lesson"
 - statement: 合并后的陈述文本
 - durable: 0 或 1（如果任一原始项 durable=1 则为 1）
+- member_ids: 被合并进来的原始 candidate_id 列表（必须从输入的 candidate_id 中选取）
 
 注意：
 - 只合并语义相同的候选
+- 独立的候选也要输出，member_ids 只放它自己
 - 保持信息完整性
-- 如果没有任何可合并的候选，按原样返回
 
 返回格式: { "merged_memories": [...] }`,
       },
@@ -191,15 +275,36 @@ async function llmMergeCandidates(
   if (!jsonMatch) return null
 
   try {
-    const parsed = JSON.parse(jsonMatch[0]) as { merged_memories: Array<{ type: string; statement: string; durable: number }> }
+    const parsed = JSON.parse(jsonMatch[0]) as {
+      merged_memories: Array<{
+        type: string
+        statement: string
+        durable: number
+        member_ids?: string[]
+      }>
+    }
     if (!Array.isArray(parsed.merged_memories)) return null
 
-    return parsed.merged_memories.map(m => ({
-      conversation_id: candidates[0]?.conversation_id ?? 'unknown',
-      type: m.type,
-      statement: m.statement,
-      durable: m.durable ? 1 : 0,
-    }))
+    const candidateById = new Map(candidates.map(c => [c.id, c]))
+
+    return parsed.merged_memories.map(m => {
+      const memberIds = m.member_ids?.length ? m.member_ids : []
+      // Reconstruct conversation_ids from original candidates
+      const conversationIds = [
+        ...new Set(
+          memberIds
+            .map(id => candidateById.get(id)?.conversation_id)
+            .filter(Boolean) as string[]
+        ),
+      ]
+      return {
+        conversation_id: conversationIds.length > 0 ? conversationIds.join(',') : candidates[0]?.conversation_id ?? 'unknown',
+        type: m.type,
+        statement: m.statement,
+        durable: m.durable ? 1 : 0,
+        member_ids: memberIds,
+      }
+    })
   } catch {
     return null
   }

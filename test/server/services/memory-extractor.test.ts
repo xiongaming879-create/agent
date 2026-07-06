@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import {
   initMemoryDb,
   resetMemoryDb,
@@ -7,7 +9,9 @@ import {
 } from '../../../server/src/db/memory-db'
 import { extractSessionMemories } from '../../../server/src/services/memory-extractor'
 
-const TEST_DB = `/tmp/memory-test-${process.pid}.db`
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const TEST_DB = path.resolve(__dirname, '../../../server/data/memory-extractor-test.db')
 process.env.MEMORY_DB_PATH = TEST_DB
 process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
 process.env.ANTHROPIC_BASE_URL = 'https://api.test.com'
@@ -157,4 +161,9 @@ describe('Memory Extractor — extractSessionMemories', () => {
     // Fetch should have been called at least once (for LLM API)
     expect(fetchSpy).toHaveBeenCalled()
   })
+})
+
+afterAll(() => {
+  resetMemoryDb()
+  if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
 })
