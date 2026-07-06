@@ -2,6 +2,7 @@ import { Router } from 'express'
 import { getMessages, getMessagesByParent, createMessage, getMessage, getConversation, updateConversation } from '../db'
 import { authMiddleware } from '../middleware/auth'
 import { runAgent, type AgentOptions } from '../services/agent'
+import { extractSessionMemories } from '../services/memory-extractor'
 import { tools } from '../tools'
 import type { AgentEvent, ThoughtStep } from '../types'
 
@@ -133,6 +134,13 @@ router.post('/:conversationId/messages', async (req, res) => {
       thought_steps: thoughtSteps,
     })
   })
+
+  // Fire-and-forget memory extraction after SSE stream completes
+  const allMessages = getMessages(req.params.conversationId)
+  extractSessionMemories(
+    req.params.conversationId,
+    allMessages.map(m => ({ role: m.role, content: m.content }))
+  ).catch(err => console.warn('[Memory] Extraction failed:', err))
 })
 
 router.patch('/:conversationId/messages/:messageId', (req, res) => {
@@ -202,6 +210,13 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
       thought_steps: thoughtSteps,
     })
   })
+
+  // Fire-and-forget memory extraction after SSE stream completes
+  const allMessages = getMessages(req.params.conversationId)
+  extractSessionMemories(
+    req.params.conversationId,
+    allMessages.map(m => ({ role: m.role, content: m.content }))
+  ).catch(err => console.warn('[Memory] Extraction failed:', err))
 })
 
 export default router
