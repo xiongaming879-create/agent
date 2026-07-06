@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 import { initDb, stopAutoSave } from './db'
+import { initMemoryDb } from './db/memory-db'
 import { seedAdmin } from './db/user'
 import conversationRouter from './routes/conversation'
 import messageRouter from './routes/message'
@@ -35,6 +36,7 @@ app.get('/api/mcp/status', (_req, res) => {
 
 async function start() {
   await initDb()
+  await initMemoryDb()
 
   // Seed admin account
   const adminPassword = process.env.ADMIN_PASSWORD || 'Xiongam-1314'
