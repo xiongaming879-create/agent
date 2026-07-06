@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterAll } from 'vitest'
 import fs from 'fs'
+import path from 'path'
+import { fileURLToPath } from 'url'
 import {
   initMemoryDb,
   resetMemoryDb,
@@ -12,7 +14,9 @@ import {
   getAllRules,
 } from '../../../server/src/db/memory-db'
 
-const TEST_DB = `/tmp/memory-test-${process.pid}.db`
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
+const TEST_DB = path.resolve(__dirname, '../../../server/data/memory-test.db')
 process.env.MEMORY_DB_PATH = TEST_DB
 
 describe('Memory Database — 数据库初始化', () => {
@@ -257,4 +261,9 @@ describe('Memory Database — Rule CRUD', () => {
     const rules = getAllRules()
     expect(rules).toEqual([])
   })
+})
+
+afterAll(() => {
+  resetMemoryDb()
+  if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
 })
