@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { DynamicStructuredTool } from '@langchain/core/tools'
 import { z } from 'zod'
 import type { Tool } from '../types'
@@ -47,6 +48,32 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodTypeAny {
   return z.object(shape)
 }
 
+/**
+ * Map a plain string input to the first suitable parameter of a tool's schema.
+ * Priority: required → common keys → first property → { input } fallback.
+ */
+function mapStringInputToSchema(input: string, schema: Record<string, unknown> | undefined): Record<string, unknown> {
+  if (!schema || schema.type !== 'object') return { input }
+
+  const properties = schema.properties as Record<string, unknown> | undefined
+  if (!properties) return { input }
+
+  const required = (schema.required as string[]) ?? []
+  const propertyKeys = Object.keys(properties)
+
+  // Prefer the single required property
+  if (required.length === 1) return { [required[0]]: input }
+
+  // Prefer common key names that accept plain text/URL input
+  const commonKeys = ['url', 'query', 'text', 'path', 'content', 'message', 'input']
+  for (const key of commonKeys) {
+    if (propertyKeys.includes(key)) return { [key]: input }
+  }
+
+  // Fall back to the first property
+  return { [propertyKeys[0]]: input }
+}
+
 export async function connectMcpServer(
   name: string,
   config: McpServerConfig
@@ -54,13 +81,26 @@ export async function connectMcpServer(
   console.log(`[MCP] Connecting to "${name}"...`)
 
   try {
-    const transport = new StdioClientTransport({
-      command: config.command,
-      args: config.args,
-      env: config.env
-        ? { ...process.env as Record<string, string>, ...config.env }
-        : undefined,
-    })
+    const transportType = config.type || 'stdio'
+
+    let transport: StdioClientTransport | SSEClientTransport
+    if (transportType === 'sse') {
+      if (!config.url) {
+        throw new Error(`SSE transport requires a "url" field`)
+      }
+      transport = new SSEClientTransport(new URL(config.url))
+    } else {
+      if (!config.command) {
+        throw new Error(`Stdio transport requires a "command" field`)
+      }
+      transport = new StdioClientTransport({
+        command: config.command,
+        args: config.args,
+        env: config.env
+          ? { ...process.env as Record<string, string>, ...config.env }
+          : undefined,
+      })
+    }
 
     const client = new Client({
       name: 'agent-server',
@@ -80,6 +120,7 @@ export async function connectMcpServer(
       const toolDesc = tool.description || `MCP tool: ${toolName}`
 
       // Fallback Tool (string input) for legacy mode
+      const inputSchema = tool.inputSchema as Record<string, unknown> | undefined
       mcpTools.push({
         name: toolName,
         description: toolDesc,
@@ -87,8 +128,21 @@ export async function connectMcpServer(
           let parsedArgs: Record<string, unknown>
           try {
             parsedArgs = JSON.parse(args)
+            // If agent used `input` key but schema expects something else (e.g. `url`), remap
+            if (parsedArgs.input !== undefined && inputSchema?.type === 'object') {
+              const properties = inputSchema.properties as Record<string, unknown> | undefined
+              const propertyKeys = Object.keys(properties ?? {})
+              if (!propertyKeys.includes('input') && propertyKeys.length > 0) {
+                const preferred = ['url', 'query', 'text', 'path', 'content', 'message']
+                  .find(k => propertyKeys.includes(k))
+                if (preferred) {
+                  parsedArgs = { [preferred]: parsedArgs.input }
+                }
+              }
+            }
           } catch {
-            parsedArgs = { input: args }
+            // Plain string input — map to the first required parameter of the tool's schema
+            parsedArgs = mapStringInputToSchema(args, inputSchema)
           }
           const callResult = await client.callTool({ name: toolName, arguments: parsedArgs })
           if (typeof callResult.content === 'string') return callResult.content

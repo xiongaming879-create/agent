@@ -31,10 +31,36 @@ export interface AgentOptions {
   systemPrompt?: string
 }
 
+/** Infer the most likely parameter name for a tool based on its name. */
+function inferToolParam(toolName: string): string {
+  const paramByPattern: Array<[RegExp, string]> = [
+    [/^fetch|^browser_navigate/i, 'url'],
+    [/^read|^write|^delete|^move|^copy|^edit|^create|^list|^search/i, 'path'],
+    [/^search|^query|^find|^lookup|^text_search|^around_search/i, 'query'],
+    [/^browser_click|^browser_type|^browser_hover|^browser_drag|^browser_drop/i, 'selector'],
+    [/^browser_press|^browser_select/i, 'selector'],
+    [/^browser_fill/i, 'form_data'],
+    [/^browser_screenshot/i, ''],
+    [/^maps_geo|^maps_regeocode|^maps_ip_location|^maps_weather/i, 'location'],
+    [/^maps_direction|^maps_distance|^maps_bicycling/i, 'origin_destination'],
+    [/^maps_search_detail/i, 'id'],
+    [/^read_query|^write_query/i, 'sql'],
+    [/^create_table|^list_tables|^describe_table/i, 'table'],
+  ]
+  for (const [pattern, param] of paramByPattern) {
+    if (pattern.test(toolName)) return param
+  }
+  return 'input'
+}
+
 function buildToolListText(): string {
   return allTools.map(t => {
     if (KNOWN_TOOL_FORMATS[t.name]) return `- ${KNOWN_TOOL_FORMATS[t.name]}`
-    return `- ${t.name}(<input>) — ${t.description}`
+    const param = inferToolParam(t.name)
+    if (param) {
+      return `- ${t.name}(<${param}>) — ${t.description}`
+    }
+    return `- ${t.name}() — ${t.description}`
   }).join('\n')
 }
 
