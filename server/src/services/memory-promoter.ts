@@ -4,10 +4,8 @@ import {
   createRule,
   type Candidate,
 } from '../db/memory-db'
-
-const ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_AUTH_TOKEN || ''
-const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com'
-const MODEL = process.env.AGENT_MODEL || 'deepseek-v4-flash'
+import { callLLM, stripMarkdownCodeFence, extractFirstJsonObject } from './llm-caller'
+import { MODEL_LIGHT } from './llm-config'
 
 export async function promoteCandidates(): Promise<{ promoted: number; kept: number }> {
   const candidates = getUnpromotedCandidates()
@@ -78,7 +76,7 @@ export async function promoteCandidates(): Promise<{ promoted: number; kept: num
       }
     }
   } else {
-    // No LLM merge — use statement-based grouping on original candidates
+    // No LLM merge - use statement-based grouping on original candidates
     const groups = groupByStatement(candidates)
 
     for (const group of groups) {
@@ -144,8 +142,13 @@ function evaluateGroup(group: Candidate[]): {
     }
   }
 
-  // Priority 3: explicit (any in group has durable=1)
-  if (group.some(c => c.durable === 1)) {
+  // Priority 3: explicit (durable=1) OR single-session user_preference
+  // - durable=1: 用户明确要求记住
+  // - user_preference 单会话声明: 个人偏好无需跨会话重复即应记住（复用 explicit 标签，
+  //   避免新增枚举值导致重建表，遵守"禁止 DROP TABLE"原则）
+  const hasDurable = group.some(c => c.durable === 1)
+  const isUserPreference = group.some(c => c.type === 'user_preference')
+  if (hasDurable || isUserPreference) {
     return {
       kind: 'user_preference_rule',
       rule: group[0].statement,
@@ -190,8 +193,8 @@ function evaluateMergedGroup(
     }
   }
 
-  // Priority 3: explicit (durable=1)
-  if (durable === 1) {
+  // Priority 3: explicit (durable=1) OR single-session user_preference
+  if (durable === 1 || type === 'user_preference') {
     return {
       kind: 'user_preference_rule',
       rule: statement,
@@ -214,22 +217,13 @@ interface MergedResult {
 async function llmMergeCandidates(
   candidates: Candidate[]
 ): Promise<MergedResult[] | null> {
-  const url = `${ANTHROPIC_BASE_URL}/v1/messages`
-
   const candidateList = candidates.map(c => ({
     candidate_id: c.id,
     type: c.type,
     statement: c.statement,
   }))
 
-  const body = {
-    model: MODEL,
-    max_tokens: 1024,
-    stream: false,
-    messages: [
-      {
-        role: 'system' as const,
-        content: `你是一个记忆合并助手。分析以下候选记忆，合并同义/高度相似的候选为一条。返回 JSON 格式的 merged_memories 数组。
+  const systemPrompt = `你是一个记忆合并助手。分析以下候选记忆，合并同义/高度相似的候选为一条。返回 JSON 格式的 merged_memories 数组。
 
 每个合并后的项包含：
 - type: "user_preference" | "fact" | "lesson"
@@ -242,40 +236,29 @@ async function llmMergeCandidates(
 - 独立的候选也要输出，member_ids 只放它自己
 - 保持信息完整性
 
-返回格式: { "merged_memories": [...] }`,
-      },
-      {
-        role: 'user' as const,
-        content: JSON.stringify({ candidates: candidateList }),
-      },
-    ],
-  }
+返回格式: { "merged_memories": [...] }`
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_AUTH_TOKEN,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify(body),
-  })
-
-  if (!response.ok) {
-    console.warn(`[MemoryPromoter] LLM API returned ${response.status}`)
+  let text: string
+  try {
+    text = await callLLM(
+      [{ role: 'user', content: JSON.stringify({ candidates: candidateList }) }],
+      systemPrompt,
+      MODEL_LIGHT,
+      1024
+    )
+  } catch {
     return null
   }
 
-  const data = await response.json() as { content: Array<{ text: string }> }
-  const text = data.content?.[0]?.text
   if (!text) return null
 
-  // Parse JSON from response
-  const jsonMatch = text.match(/\{[\s\S]*"merged_memories"[\s\S]*\}/)
-  if (!jsonMatch) return null
+  // 解析 JSON（剥离 markdown 代码块 + 栈匹配提取，字段顺序无关）
+  const stripped = stripMarkdownCodeFence(text)
+  const jsonStr = extractFirstJsonObject(stripped)
+  if (!jsonStr) return null
 
   try {
-    const parsed = JSON.parse(jsonMatch[0]) as {
+    const parsed = JSON.parse(jsonStr) as {
       merged_memories: Array<{
         type: string
         statement: string

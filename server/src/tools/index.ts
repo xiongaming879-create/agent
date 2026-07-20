@@ -7,7 +7,7 @@ import { calculatorTool } from './calculator'
 const builtInTools: Tool[] = [
   {
     name: 'search',
-    description: 'Fetch and extract text content from a URL. Input should be a valid HTTP/HTTPS URL.',
+    description: 'Fetch and extract text content. Pass a URL to fetch a specific page, or a search query (e.g. "2025年放假安排") to search the web via Google.',
     execute: async (url: string) => searchTool(url),
   },
   {

@@ -19,7 +19,7 @@ process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
 process.env.ANTHROPIC_BASE_URL = 'https://api.test.com'
 process.env.AGENT_MODEL = 'test-model'
 
-describe('Memory Promoter — promoteCandidates', () => {
+describe('Memory Promoter - promoteCandidates', () => {
   beforeEach(async () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
     resetMemoryDb()
@@ -38,7 +38,7 @@ describe('Memory Promoter — promoteCandidates', () => {
   })
 
   it('单个候选不会触发晋升，保留为 kept', async () => {
-    // A single candidate with no promotion-qualifying properties (no durable, not lesson, single conversation)
+    // A single candidate with no promotion-qualifying properties (no durable, not lesson, single conversation, fact type)
     createCandidate({
       conversation_id: 'conv-1',
       type: 'fact',
@@ -133,6 +133,43 @@ describe('Memory Promoter — promoteCandidates', () => {
     expect(rules.length).toBe(1)
     expect(rules[0].rule).toContain('测试规则写入')
     expect(rules[0].supporting_conversations).toContain('conv-a')
+  })
+
+  // ===== 新增：user_preference 单会话提升（方案2 / L3） =====
+
+  it('单会话 user_preference（durable=0）晋升为 explicit（个人偏好无需跨会话重复）', async () => {
+    createCandidate({ conversation_id: 'conv-a', type: 'user_preference', statement: '用户中午12-14点睡午觉', durable: 0 })
+
+    const result = await promoteCandidates()
+    expect(result.promoted).toBe(1)
+    expect(result.kept).toBe(0)
+
+    const rules = getAllRules()
+    expect(rules.length).toBe(1)
+    expect(rules[0].kind).toBe('user_preference_rule')
+    expect(rules[0].promotion_reason).toBe('explicit')
+    expect(rules[0].rule).toContain('睡午觉')
+  })
+
+  it('单会话 fact（durable=0）不提升（fact 需跨会话或 durable=1）', async () => {
+    createCandidate({ conversation_id: 'conv-a', type: 'fact', statement: '一次性事实', durable: 0 })
+
+    const result = await promoteCandidates()
+    expect(result).toEqual({ promoted: 0, kept: 1 })
+
+    const rules = getAllRules()
+    expect(rules.length).toBe(0)
+  })
+
+  it('cross_session 优先于单会话 user_preference（两会话同偏好）', async () => {
+    createCandidate({ conversation_id: 'conv-a', type: 'user_preference', statement: '用户喜欢简洁回复', durable: 0 })
+    createCandidate({ conversation_id: 'conv-b', type: 'user_preference', statement: '用户喜欢简洁回复', durable: 0 })
+
+    const result = await promoteCandidates()
+    expect(result.promoted).toBe(1)
+
+    const rules = getAllRules()
+    expect(rules[0].promotion_reason).toBe('cross_session')
   })
 })
 

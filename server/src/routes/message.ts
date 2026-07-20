@@ -91,7 +91,7 @@ router.post('/:conversationId/messages', async (req, res) => {
     return
   }
 
-  const { content, parent_id } = req.body || {}
+  const { content, parent_id, complexity } = req.body || {}
   if (!content) {
     res.status(400).json({ error: 'Content is required' })
     return
@@ -123,6 +123,7 @@ router.post('/:conversationId/messages', async (req, res) => {
 
   const agentOptions: AgentOptions = {
     systemPrompt: conv?.system_prompt || undefined,
+    complexity: complexity || 'medium',
   }
 
   await processAgentStream(res, contextMessages, agentOptions, (fullContent, thoughtSteps) => {
@@ -183,6 +184,8 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
     return
   }
 
+  const { complexity } = req.body || {}
+
   res.setHeader('Content-Type', 'text/event-stream')
   res.setHeader('Cache-Control', 'no-cache')
   res.setHeader('Connection', 'keep-alive')
@@ -199,6 +202,7 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
   const conv = getConversation(req.params.conversationId)
   const agentOptions: AgentOptions = {
     systemPrompt: conv?.system_prompt || undefined,
+    complexity: complexity || 'medium',
   }
 
   await processAgentStream(res, contextMessages, agentOptions, (fullContent, thoughtSteps) => {

@@ -3,6 +3,7 @@ import { ref, watch, computed, nextTick } from 'vue'
 import { useConversationStore } from '../stores/conversation'
 import { useMessageStore } from '../stores/message'
 import { useAuthStore } from '../stores/auth'
+import type { Complexity } from '../types'
 import MessageBubble from './MessageBubble.vue'
 import ChatInput from './ChatInput.vue'
 
@@ -15,6 +16,7 @@ const hasActiveConv = computed(() => !!convStore.activeId)
 const chatContainer = ref<HTMLElement | null>(null)
 const showPromptDialog = ref(false)
 const systemPrompt = ref('')
+const currentComplexity = ref<Complexity>('medium')
 
 // Branch tracking: parent_id -> selected child index
 const branchSelections = ref<Record<string, number>>({})
@@ -62,7 +64,7 @@ async function scrollToBottom() {
   }
 }
 
-async function handleSend(content: string) {
+async function handleSend(content: string, complexity: Complexity) {
   if (!convStore.activeId) {
     await convStore.create()
   }
@@ -72,14 +74,18 @@ async function handleSend(content: string) {
     const title = content.length > 22 ? content.slice(0, 22) + '...' : content
     await convStore.update(conv.id, { title })
   }
-  await msgStore.sendMessage(convStore.activeId!, content)
+  await msgStore.sendMessage(convStore.activeId!, content, undefined, complexity)
   await scrollToBottom()
 }
 
 async function handleRegenerate(messageId: string) {
   if (!convStore.activeId) return
-  await msgStore.regenerateMessage(convStore.activeId, messageId)
+  await msgStore.regenerateMessage(convStore.activeId, messageId, currentComplexity.value)
   await scrollToBottom()
+}
+
+function handleComplexityChange(complexity: Complexity) {
+  currentComplexity.value = complexity
 }
 
 function handleSwitchBranch(messageId: string, parentId: string | null, index: number) {
@@ -146,7 +152,11 @@ function getSiblingInfo(message: { id: string; parent_id: string | null }) {
     </div>
 
     <div v-if="showInput" class="border-t border-white/10 p-6">
-      <ChatInput :disabled="msgStore.isStreaming" @send="handleSend" />
+      <ChatInput
+        :disabled="msgStore.isStreaming"
+        @send="handleSend"
+        @update:complexity="handleComplexityChange"
+      />
     </div>
 
     <div v-if="showPromptDialog" class="fixed inset-0 bg-black/60 backdrop-blur-xl flex items-center justify-center z-50">

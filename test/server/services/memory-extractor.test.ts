@@ -25,6 +25,14 @@ function mockLLMResponse(responseBody: unknown) {
   )
 }
 
+function mockLLMTextResponse(text: string) {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({
+      content: [{ text }],
+    }), { status: 200 })
+  )
+}
+
 function mockLLMFailure() {
   vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Network error'))
 }
@@ -37,7 +45,7 @@ function mockLLMInvalidResponse() {
   )
 }
 
-describe('Memory Extractor — extractSessionMemories', () => {
+describe('Memory Extractor - extractSessionMemories', () => {
   beforeEach(async () => {
     if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
     resetMemoryDb()
@@ -150,7 +158,7 @@ describe('Memory Extractor — extractSessionMemories', () => {
       ],
     })
 
-    // Spy on fetch to count calls
+    // Spy on Fetch to count calls
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
 
     await extractSessionMemories('conv-1', [
@@ -160,6 +168,97 @@ describe('Memory Extractor — extractSessionMemories', () => {
 
     // Fetch should have been called at least once (for LLM API)
     expect(fetchSpy).toHaveBeenCalled()
+  })
+
+  // ===== 新增：parseResponse 容错测试（方案1 / L1） =====
+
+  it('markdown 代码块包裹的 JSON 能解析', async () => {
+    mockLLMTextResponse('```json\n{"episode_summary":"测试 markdown 包裹","memory_items":[{"type":"user_preference","statement":"用户喜欢深色主题","durable":true}]}\n```')
+    await extractSessionMemories('conv-md', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const db = getMemoryDb()
+    const episodes = db.exec('SELECT summary FROM memory_episodes')
+    expect(episodes[0].values[0][0]).toBe('测试 markdown 包裹')
+    const candidates = db.exec('SELECT statement FROM memory_candidates')
+    expect(candidates[0].values[0][0]).toBe('用户喜欢深色主题')
+  })
+
+  it('字段顺序反转的 JSON 能解析（memory_items 在 episode_summary 前）', async () => {
+    mockLLMTextResponse('{"memory_items":[{"type":"fact","statement":"事实A","durable":false}],"episode_summary":"顺序反转测试"}')
+    await extractSessionMemories('conv-rev', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const db = getMemoryDb()
+    const episodes = db.exec('SELECT summary FROM memory_episodes')
+    expect(episodes[0].values[0][0]).toBe('顺序反转测试')
+  })
+
+  it('JSON 前后有说明文字时仍能提取（extractFirstJsonObject）', async () => {
+    mockLLMTextResponse('好的，以下是提取的记忆：\n{"episode_summary":"带说明文字","memory_items":[]}\n以上是结果。')
+    await extractSessionMemories('conv-explain', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const db = getMemoryDb()
+    const episodes = db.exec('SELECT summary FROM memory_episodes')
+    expect(episodes[0].values[0][0]).toBe('带说明文字')
+  })
+
+  it('中文冒号的文本格式能解析', async () => {
+    mockLLMTextResponse('episode_summary：用户询问了偏好\ntype：user_preference\nstatement：用户中午12-14点睡午觉\ndurable：true')
+    await extractSessionMemories('conv-cn', [
+      { role: 'user', content: '我有睡午觉习惯' },
+      { role: 'assistant', content: '好的' },
+    ])
+    const db = getMemoryDb()
+    const candidates = db.exec('SELECT statement, durable FROM memory_candidates')
+    expect(candidates[0].values[0][0]).toBe('用户中午12-14点睡午觉')
+    expect(candidates[0].values[0][1]).toBe(1) // durable=true -> 1
+  })
+
+  // ===== 新增：标准化 callLLM 测试（方案1 / L5） =====
+
+  it('请求 body 的 system 是顶层字段，messages 不含 system role', async () => {
+    let capturedBody = ''
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
+      capturedBody = options?.body as string
+      return new Response(JSON.stringify({
+        content: [{ text: JSON.stringify({ episode_summary: '测试', memory_items: [] }) }],
+      }), { status: 200 })
+    })
+    await extractSessionMemories('conv-sys', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const body = JSON.parse(capturedBody)
+    expect(body.system).toBeTruthy()
+    expect(typeof body.system).toBe('string')
+    expect(Array.isArray(body.messages)).toBe(true)
+    for (const m of body.messages) {
+      expect(m.role).not.toBe('system')
+    }
+  })
+
+  // ===== 新增：prompt 含 durable 判定标准（方案3 / L2） =====
+
+  it('prompt 含个人习惯/长期偏好的 durable 判定标准', async () => {
+    let capturedBody = ''
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
+      capturedBody = options?.body as string
+      return new Response(JSON.stringify({
+        content: [{ text: JSON.stringify({ episode_summary: '测试', memory_items: [] }) }],
+      }), { status: 200 })
+    })
+    await extractSessionMemories('conv-prompt', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const body = JSON.parse(capturedBody)
+    expect(body.system).toContain('个人习惯')
+    expect(body.system).toContain('长期偏好')
   })
 })
 

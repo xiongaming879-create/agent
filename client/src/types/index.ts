@@ -9,6 +9,8 @@ export interface User {
   updated_at: string
 }
 
+export type Complexity = 'fast' | 'medium' | 'deep'
+
 export interface Conversation {
   id: string
   title: string

@@ -288,3 +288,4 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 8. **ReAct 格式不严格** — 模型可能用 markdown 包裹 Action，`containsToolIntent()` 做兜底检测
 9. **打字机效果** — 由后端 content_delta 单字拆分 + 30ms 间隔控制，前端直接追加
 10. **流式消息宽度** — 必须用固定 `w-[45%]` 而非 `max-w`，否则空内容时气泡会缩窄
+11. **Playwright 弹窗干扰** - `@playwright/mcp` 默认有头模式会弹浏览器窗口；在 `.mcp.json` 的 args 加 `--headless` 后台运行（CLI flag，非 Python SDK 的 `headless=True`）；改配置后需重启后端，MCP 仅在服务启动时连接一次，不热加载

@@ -1,12 +1,13 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Message, AgentEvent, ThoughtStep } from '../types'
+import type { Message, AgentEvent, ThoughtStep, Complexity } from '../types'
+import { authFetch } from '../utils/fetch'
 
 const API = '/api/conversations'
 
 function uuid(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
-    return uuid()
+    return crypto.randomUUID()
   }
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
     const r = (Math.random() * 16) | 0
@@ -50,8 +51,9 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   async function fetchMessages(conversationId: string) {
-    const res = await fetch(`${API}/${conversationId}/messages`)
-    messages.value = await res.json()
+    const res = await authFetch(`${API}/${conversationId}/messages`)
+    const data = await res.json()
+    messages.value = Array.isArray(data) ? data : []
   }
 
   function getActiveBranch(leafId: string | null): Message[] {
@@ -117,7 +119,7 @@ export const useMessageStore = defineStore('message', () => {
     }
   }
 
-  async function sendMessage(conversationId: string, content: string, parentId?: string | null, complexity?: string) {
+  async function sendMessage(conversationId: string, content: string, parentId?: string | null, complexity?: Complexity) {
     isStreaming.value = true
     const thoughtSteps: ThoughtStep[] = []
 
@@ -143,7 +145,7 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      const res = await fetch(`${API}/${conversationId}/messages`, {
+      const res = await authFetch(`${API}/${conversationId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content, parent_id: parentId || null, complexity: complexity || 'medium' }),
@@ -192,7 +194,7 @@ export const useMessageStore = defineStore('message', () => {
   }
 
   async function editMessage(conversationId: string, messageId: string, content: string) {
-    const res = await fetch(`${API}/${conversationId}/messages/${messageId}`, {
+    const res = await authFetch(`${API}/${conversationId}/messages/${messageId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content }),
@@ -202,7 +204,7 @@ export const useMessageStore = defineStore('message', () => {
     return branched
   }
 
-  async function regenerateMessage(conversationId: string, messageId: string) {
+  async function regenerateMessage(conversationId: string, messageId: string, complexity?: Complexity) {
     isStreaming.value = true
     const thoughtSteps: ThoughtStep[] = []
 
@@ -217,8 +219,10 @@ export const useMessageStore = defineStore('message', () => {
     }
 
     try {
-      const res = await fetch(`${API}/${conversationId}/messages/${messageId}/regenerate`, {
+      const res = await authFetch(`${API}/${conversationId}/messages/${messageId}/regenerate`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ complexity: complexity || 'medium' }),
       })
       const reader = res.body?.getReader()
       if (!reader) throw new Error('No response body')

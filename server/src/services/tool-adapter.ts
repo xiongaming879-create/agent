@@ -15,6 +15,11 @@ export function wrapAllTools(
   customTools: Tool[],
   existingLcTools: DynamicStructuredTool<Record<string, unknown>>[] = []
 ): DynamicStructuredTool<Record<string, unknown>>[] {
-  const wrapped = customTools.map(wrapCustomTool)
+  // MCP tools already have proper DynamicStructuredTool instances in existingLcTools.
+  // Filter them out from customTools to avoid wrapping with a generic {input} schema
+  // that would override the proper schema (e.g. fetch expects {url}, not {input}).
+  const lcToolNames = new Set(existingLcTools.map(t => t.name))
+  const toolsToWrap = customTools.filter(t => !lcToolNames.has(t.name))
+  const wrapped = toolsToWrap.map(wrapCustomTool)
   return [...existingLcTools, ...wrapped]
 }

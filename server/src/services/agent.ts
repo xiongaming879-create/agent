@@ -5,21 +5,24 @@ import { createReactAgent } from '@langchain/langgraph/prebuilt'
 import { wrapAllTools } from './tool-adapter'
 import { langchainAgentRunner } from './langchain-adapter'
 import { buildMemoryContext } from './memory-recall'
+import { buildKnowledgeContext, buildDateContext } from './knowledge'
+import { ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, MODEL, MODEL_LIGHT, MODEL_STRONG } from './llm-config'
+import type { QueryCategory, Complexity } from './llm-config'
+import { runRoutedAgent } from './query-router'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
 }
 
-const ANTHROPIC_AUTH_TOKEN = process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN || ''
-const ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com'
-const MODEL = process.env.AGENT_MODEL || 'deepseek-v4-flash'
 const USE_LANGCHAIN = process.env.USE_LANGCHAIN !== 'false'
 
-const MAX_ITERATIONS = 25
+// LangGraph 的 recursionLimit 计的是 super-steps，每轮（agent 推理 + tools 执行）= 2 步。
+// 所以 50 ≈ 25 次实际工具调用。复杂任务（搜索+抓取+分析）需要足够余量。
+const MAX_ITERATIONS = 50
 
 const KNOWN_TOOL_FORMATS: Record<string, string> = {
-  search: 'search(<url>) — Fetch and extract text from a URL',
+  search: 'search(<url or query>) — Fetch a URL or search the web (e.g. search("2025年放假安排"))',
   filesystem_read: 'filesystem_read(<filepath>) — Read a file from the virtual workspace',
   filesystem_write: 'filesystem_write(<json with path and content>) — Write a file to the virtual workspace',
   filesystem_list: 'filesystem_list(<dirpath>) — List files in a directory',
@@ -29,6 +32,7 @@ const KNOWN_TOOL_FORMATS: Record<string, string> = {
 
 export interface AgentOptions {
   systemPrompt?: string
+  complexity?: 'fast' | 'medium' | 'deep'
 }
 
 /** Infer the most likely parameter name for a tool based on its name. */
@@ -78,7 +82,9 @@ function createLangchainAgent(systemPrompt?: string) {
   const lcAllTools = wrapAllTools(allTools, lcTools)
 
   const toolList = buildToolListText()
-  const systemContent = `你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。
+  const systemContent = `${buildDateContext()}
+
+你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。
 
 ## 语言
 - 始终使用与用户提问相同的语言回复。用户用中文则用中文回复，用英文则用英文回复。
@@ -94,12 +100,25 @@ function createLangchainAgent(systemPrompt?: string) {
 - 用户前后回答矛盾时，主动指出冲突并请求确认："你之前提到A，现在又提到B，请问以哪个为准？"
 - 连续3次追问仍信息不全时，停止追问，基于已有信息给出可选方案供用户选择
 
-## 工具使用
-- 需要获取外部信息、执行计算、浏览网页等操作时，调用对应工具
-- 不需要工具就能回答的问题，直接回答
-- 每次只调用一个工具，等待结果后再决定下一步
-- 工具调用失败时，尝试替代方案，不要轻易放弃
-- 经过多次尝试仍无法获取有效信息时，如实告知用户
+${buildKnowledgeContext()}
+
+## 工具使用策略
+- **知识优先**：节假日、日期、常识性信息直接用内置知识，不要搜索
+- **按需搜索**：仅当需要实时信息（赛事、机票、新闻、最新政策）才调用 search/fetch
+- **并行调用**：多个独立的搜索/抓取可以同一轮并行调用，减少往返轮次
+- **适时停止**（重要）：
+  - 获取到足够回答问题的信息后，立即综合分析并输出最终答案，不要再多搜
+  - 不要用相同关键词反复搜索；换不同角度搜或基于已有信息回答
+  - 搜索类工具（search/fetch/browser）总调用不超过 25 次，重复相同输入会被强制拦截
+- **搜索容错**：
+  - search 超时 -> 简化关键词重试一次（如只搜核心词"2026中秋日期"）
+  - 再失败 -> 用内置知识或已有信息继续，不要中断流程
+- **工具选择优先级**：
+  1. search：搜索关键词，获取搜索结果摘要 + 相关 URL
+  2. fetch：只在 search 返回了具体 URL 后，抓取该 URL 获取详情。不要猜测 URL
+  3. browser_*：仅当页面需要 JS 渲染或需要交互（点击/填表）时才用，普通文本抓取不要用
+  - 典型流程：search("关键词") -> 从结果中提取 URL -> fetch(url) -> 综合回答
+- **禁止**：不要用 fetch 抓搜索结果页，搜索请用 search 工具
 
 ## 浏览器工具使用策略
 - 浏览网页时：先 browser_navigate 打开页面，再 browser_snapshot 获取页面内容
@@ -241,7 +260,9 @@ async function* streamAnthropic(messages: ChatMessage[], systemPrompt: string): 
 
 function buildLegacySystemPrompt(): string {
   const toolList = buildToolListText()
-  return `你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。
+  return `${buildDateContext()}
+
+你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。
 
 ## 语言
 - 始终使用与用户提问相同的语言回复。用户用中文则用中文回复，用英文则用英文回复。
@@ -268,12 +289,15 @@ Answer: <最终答案>
 - 用户前后回答矛盾时，主动指出冲突并请求确认："你之前提到A，现在又提到B，请问以哪个为准？"
 - 连续3次追问仍信息不全时，停止追问，基于已有信息给出可选方案供用户选择
 
-## 工具使用
-- 需要获取外部信息、执行计算、浏览网页等操作时，调用对应工具
-- 不需要工具就能回答的问题，直接输出 Answer
-- 每次只调用一个工具，等待 Observation 后再决定下一步
-- 工具调用失败时，尝试替代方案，不要轻易放弃
-- 经过多次尝试仍无法获取有效信息时，输出：Answer: 目前无法确定
+${buildKnowledgeContext()}
+
+## 工具使用策略
+- **知识优先**：节假日、日期、常识性信息直接用内置知识，不要搜索
+- **按需搜索**：仅当需要实时信息（赛事、机票、新闻、最新政策）才调用 search/fetch
+- **适时停止**：获取到足够信息后立即输出 Answer，同一问题最多搜索 3 次
+- **搜索容错**：search 超时 -> 简化关键词重试 -> 再失败用内置知识继续，不中断
+- **工具选择优先级**：search 搜关键词 -> fetch 抓 search 返回的 URL -> browser_ 仅用于 JS 渲染页面
+- **fetch 使用限制**：只在明确知道完整 URL 时才用 fetch，不要猜测 URL 结构
 
 ## 浏览器工具使用策略
 - 浏览网页时：先 browser_navigate 打开页面，再 browser_snapshot 获取页面内容
@@ -466,10 +490,10 @@ export async function* runAgent(
   thirdArg?: string | AgentOptions
 ): AsyncGenerator<AgentEvent> {
   const options = typeof thirdArg === 'string' ? { systemPrompt: thirdArg } as AgentOptions : thirdArg
-  console.log(`[Agent] Using ${USE_LANGCHAIN ? 'LangChain' : 'legacy'} implementation`)
+  console.log(`[Agent] Using ${USE_LANGCHAIN ? 'LangChain (routed)' : 'legacy'} implementation`)
 
   const inner = USE_LANGCHAIN
-    ? runAgentLangchain(messages, options)
+    ? runRoutedAgent(messages, options || {})
     : runAgentLegacy(messages, _tools, thirdArg)
 
   let allContent = ''
@@ -488,13 +512,14 @@ export async function* runAgent(
     yield event
   }
 
-  // 后置校验：检查回答是否编造了未基于工具结果的内容
+  // 后置校验：检查回答是否编造了未基于工具结果的内容。
+  // 注意：Agent 会使用内置知识库回答（节假日、常识等），这些内容不在 observations 中，
+  // 校验器无法区分"内置知识"和"编造"，容易误判。因此校验失败只记日志，不覆盖/追加回答。
+  // "暂无相关信息" 仅由 Agent 自身在确实查不到结果时输出。
   if (allContent.trim() && allObservations.length > 0) {
     const result = await validateAnswer(allContent, allObservations)
     if (!result.valid) {
       console.warn(`[Agent] Fact-check failed: ${result.reason}`)
-      yield { type: 'thought', content: `【事实核查】回答中存在未基于工具结果的内容：${result.reason || '编造事实'}` }
-      yield { type: 'content', content: '暂无相关信息' }
     }
   }
 

@@ -1,5 +1,30 @@
 {
   "mcpServers": {
-   
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp", "--headless"]
+    },
+    "fetch": {
+      "type": "sse",
+      "url": "https://mcp.api-inference.modelscope.net/ffcc96854ff241/sse"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\17620\\Desktop\\熊阿明\\code\\agent"]
+    },
+    "sqlite": {
+      "command": "uvx",
+      "args": ["mcp-server-sqlite", "--db-path", "C:\\Users\\17620\\Desktop\\熊阿明\\code\\agent\\server\\data\\agent.db"]
+    },
+    "amap-maps": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@amap/amap-maps-mcp-server"
+      ],
+      "env": {
+        "AMAP_MAPS_API_KEY": "e42c2f07ae5880fa08c7f7d0c4a1cab3"
+      }
+    }
   }
 }

@@ -25,7 +25,6 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodTypeAny {
   }
   const shape: Record<string, z.ZodTypeAny> = {}
   for (const [key, prop] of Object.entries(properties)) {
-    const required = (schema.required as string[])?.includes(key) ?? false
     let field: z.ZodTypeAny
     switch (prop.type) {
       case 'number':
@@ -42,10 +41,34 @@ function jsonSchemaToZod(schema: Record<string, unknown>): z.ZodTypeAny {
         field = z.string()
     }
     if (prop.description) field = field.describe(prop.description as string)
-    if (!required) field = field.optional()
-    shape[key] = field
+    // All fields optional: some models/proxies don't support the `tools` parameter and
+    // fall back to text-based tool calling with generic `{"input":"..."}` args. Making
+    // fields optional lets validation pass so the func can remap `input` at runtime.
+    shape[key] = field.optional()
   }
+
+  // Accept `input` as an optional alias alongside the real parameter names.
+  const propertyKeys = Object.keys(properties)
+  if (propertyKeys.length > 0 && !propertyKeys.includes('input')) {
+    shape.input = z.string().optional().describe('Tool input (alias for primary parameter)')
+  }
+
   return z.object(shape)
+}
+
+/** Get the best target parameter name for remapping a generic `input` value. */
+function getRemapTarget(schema: Record<string, unknown> | undefined): string | undefined {
+  if (!schema || schema.type !== 'object') return undefined
+  const properties = schema.properties as Record<string, unknown> | undefined
+  if (!properties) return undefined
+  const keys = Object.keys(properties)
+  if (keys.length === 0) return undefined
+  // Prefer common parameter names that accept plain text/URL input
+  const preferred = ['url', 'query', 'text', 'path', 'content', 'message', 'input']
+  for (const k of preferred) {
+    if (keys.includes(k)) return k
+  }
+  return keys[0]
 }
 
 /**
@@ -157,13 +180,21 @@ export async function connectMcpServer(
 
       // DynamicStructuredTool with proper schema for LangChain mode
       const zodSchema = jsonSchemaToZod(tool.inputSchema as Record<string, unknown>)
+      const remapTarget = getRemapTarget(tool.inputSchema as Record<string, unknown>)
       mcpLcTools.push(
         new DynamicStructuredTool({
           name: toolName,
           description: toolDesc,
           schema: zodSchema,
           func: async (args: Record<string, unknown>) => {
-            const callResult = await client.callTool({ name: toolName, arguments: args })
+            // Remap generic `{"input":"..."}` to the actual parameter name (e.g. `url`)
+            // when the model falls back to text-based tool calling.
+            const remapped = { ...args }
+            if (remapped.input !== undefined && remapTarget && !remapped[remapTarget]) {
+              remapped[remapTarget] = remapped.input
+              delete remapped.input
+            }
+            const callResult = await client.callTool({ name: toolName, arguments: remapped })
             if (typeof callResult.content === 'string') return callResult.content
             if (Array.isArray(callResult.content)) {
               return callResult.content

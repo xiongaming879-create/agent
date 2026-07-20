@@ -24,6 +24,64 @@ function detectStuckPattern(observations: string[], threshold: number = 3): bool
   )
 }
 
+/** Normalize a tool input string for duplicate detection (trim, lowercase, strip JSON noise). */
+function normalizeToolInput(input: string): string {
+  return input.trim().toLowerCase()
+    .replace(/[{"}\s]/g, '')
+    .slice(0, 200)
+}
+
+/** Whether a tool is a "search-type" tool that retrieves external info. */
+function isSearchTypeTool(toolName: string): boolean {
+  return /^(search|fetch|browser_navigate|browser_snapshot|browser_click|browser_type|browser_fill|browser_take_screenshot)/i.test(toolName)
+}
+
+interface SearchState {
+  searchCallCount: number         // 搜索类工具调用总次数
+  seenInputs: Map<string, number> // 记录重复输入
+}
+
+function createSearchState(): SearchState {
+  return {
+    searchCallCount: 0,
+    seenInputs: new Map(),
+  }
+}
+
+const MAX_SEARCH_CALLS = 25  // 搜索类工具总调用上限
+
+/**
+ * 简化版停止检测：只看总次数 + 完全相同输入重复。
+ * 不过度干预模型的搜索策略，让模型自己判断何时该停。
+ */
+function checkSearchEffectiveness(
+  toolName: string,
+  toolInput: string,
+  _output: string,
+  state: SearchState
+): { shouldStop: boolean; reason: string | null } {
+  if (!isSearchTypeTool(toolName)) {
+    return { shouldStop: false, reason: null }
+  }
+
+  state.searchCallCount++
+
+  // 完全相同的输入重复调用 -> 死循环，立即停止
+  const inputKey = `${toolName}:${normalizeToolInput(toolInput)}`
+  const inputCount = (state.seenInputs.get(inputKey) || 0) + 1
+  state.seenInputs.set(inputKey, inputCount)
+  if (inputCount >= 2) {
+    return { shouldStop: true, reason: `重复调用 ${toolName}(${toolInput.slice(0, 50)})` }
+  }
+
+  // 总次数兜底
+  if (state.searchCallCount > MAX_SEARCH_CALLS) {
+    return { shouldStop: true, reason: `搜索类工具调用 ${state.searchCallCount} 次超过上限 ${MAX_SEARCH_CALLS}` }
+  }
+
+  return { shouldStop: false, reason: null }
+}
+
 interface ContentBlock {
   type?: string
   text?: string
@@ -47,7 +105,9 @@ export async function* langchainAgentRunner(
   options: AgentRunOptions
 ): AsyncGenerator<AgentEvent> {
   const observations: string[] = []
+  const searchState = createSearchState()
   let hasContent = false
+  let circularReason: string | null = null
 
   const inputMessages = messages.map(m => {
     if (m.role === 'user') return new HumanMessage(m.content)
@@ -129,20 +189,38 @@ export async function* langchainAgentRunner(
             yield { type: 'observation', content: output }
             observations.push(output)
 
+            // 检测连续失败
             if (detectStuckPattern(observations)) {
               yield { type: 'thought', content: '连续多次工具执行未获得有效结果，终止循环' }
-              yield { type: 'content', content: '目前无法确定' }
-              yield { type: 'done' }
-              return
+              circularReason = '连续工具失败'
+              break
+            }
+
+            // 搜索类工具停止检测：总次数上限 + 重复输入拦截
+            const check = checkSearchEffectiveness(toolName, toolInput, output, searchState)
+            if (check.shouldStop) {
+              yield { type: 'thought', content: `${check.reason}，停止搜索，基于已有信息综合回答` }
+              circularReason = check.reason
+              break
             }
           }
         }
+        if (circularReason) break
       }
     }
 
-    // Fallback: tools were called but no answer produced
+    // Fallback: tools were called but no answer produced — summarize what we found
     if (!hasContent && observations.length > 0) {
-      yield { type: 'content', content: '经过多轮工具尝试后仍无法获取有效信息，暂时无法确定。' }
+      const usefulObs = observations.filter(o => o.length >= 20 && !o.includes('Request timeout') && !o.includes('Error:'))
+      if (usefulObs.length > 0) {
+        const summary = usefulObs.slice(-3).map((o, i) => `--- 搜索结果 ${i + 1} ---\n${o.slice(0, 800)}`).join('\n\n')
+        const prefix = circularReason
+          ? `已执行多轮工具调用（${circularReason}），未能获取完整信息。以下是目前已获取的内容：\n\n`
+          : '经过多轮工具尝试，以下是已获取的相关信息：\n\n'
+        yield { type: 'content', content: prefix + summary }
+      } else {
+        yield { type: 'content', content: '经过多轮工具尝试后仍无法获取有效信息，暂时无法确定。' }
+      }
     }
 
     yield { type: 'done' }

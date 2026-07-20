@@ -6,9 +6,13 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 
 export interface McpServerConfig {
-  command: string
-  args: string[]
+  command?: string
+  args?: string[]
   env?: Record<string, string>
+  /** Transport type: "stdio" (default) or "sse" */
+  type?: 'stdio' | 'sse'
+  /** URL for SSE transport */
+  url?: string
 }
 
 export interface McpConfig {
