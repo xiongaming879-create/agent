@@ -171,6 +171,24 @@ describe('Memory Promoter - promoteCandidates', () => {
     const rules = getAllRules()
     expect(rules[0].promotion_reason).toBe('cross_session')
   })
+
+  // ===== 新增：用户隔离（修复2）=====
+
+  it('promoteCandidates(userId) 只处理该用户的候选', async () => {
+    createCandidate({ conversation_id: 'conv-a', type: 'user_preference', statement: '用户1的偏好', durable: 1, user_id: 'user-1' })
+    createCandidate({ conversation_id: 'conv-b', type: 'user_preference', statement: '用户2的偏好', durable: 1, user_id: 'user-2' })
+
+    const result = await promoteCandidates('user-1')
+    expect(result.promoted).toBe(1)
+
+    const user1Rules = getAllRules('user-1')
+    expect(user1Rules.length).toBe(1)
+    expect(user1Rules[0].rule).toBe('用户1的偏好')
+
+    // user-2 的候选未被处理（仍 unpromoted）
+    const user2Unpromoted = getUnpromotedCandidates('user-2')
+    expect(user2Unpromoted.length).toBe(1)
+  })
 })
 
 afterAll(() => {

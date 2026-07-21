@@ -33,6 +33,7 @@ const KNOWN_TOOL_FORMATS: Record<string, string> = {
 export interface AgentOptions {
   systemPrompt?: string
   complexity?: 'fast' | 'medium' | 'deep'
+  userId?: string
 }
 
 /** Infer the most likely parameter name for a tool based on its name. */
@@ -69,7 +70,7 @@ function buildToolListText(): string {
 }
 
 
-function createLangchainAgent(systemPrompt?: string) {
+function createLangchainAgent(systemPrompt?: string, userId?: string) {
   const llm = new ChatAnthropic({
     modelName: MODEL,
     anthropicApiUrl: ANTHROPIC_BASE_URL,
@@ -149,7 +150,7 @@ ${buildKnowledgeContext()}
 Available tools:
 ${toolList}
 ${systemPrompt ? `\n${systemPrompt}` : ''}
-${buildMemoryContext()}`
+${buildMemoryContext(userId)}`
 
   return createReactAgent({ llm, tools: lcAllTools, prompt: systemContent })
 }
@@ -159,7 +160,7 @@ async function* runAgentLangchain(
   messages: ChatMessage[],
   options?: AgentOptions
 ): AsyncGenerator<AgentEvent> {
-  const agent = createLangchainAgent(options?.systemPrompt)
+  const agent = createLangchainAgent(options?.systemPrompt, options?.userId)
   yield* langchainAgentRunner(agent, messages, {
     maxIterations: MAX_ITERATIONS,
     systemPrompt: options?.systemPrompt,
@@ -258,7 +259,7 @@ async function* streamAnthropic(messages: ChatMessage[], systemPrompt: string): 
   }
 }
 
-function buildLegacySystemPrompt(): string {
+function buildLegacySystemPrompt(userId?: string): string {
   const toolList = buildToolListText()
   return `${buildDateContext()}
 
@@ -322,7 +323,7 @@ ${buildKnowledgeContext()}
 
 Available tools:
 ${toolList}
-${buildMemoryContext()}`
+${buildMemoryContext(userId)}`
 }
 
 async function* runAgentLegacy(
@@ -332,13 +333,15 @@ async function* runAgentLegacy(
 ): AsyncGenerator<AgentEvent> {
   let maxTurns = MAX_ITERATIONS
   let systemPrompt: string | undefined
+  let userId: string | undefined
   if (typeof thirdArg === 'string') {
     systemPrompt = thirdArg
   } else if (thirdArg && typeof thirdArg === 'object') {
     systemPrompt = thirdArg.systemPrompt
+    userId = thirdArg.userId
   }
   const apiMessages: ChatMessage[] = [...messages]
-  const fullSystemPrompt = [buildLegacySystemPrompt(), systemPrompt || ''].filter(Boolean).join('\n\n')
+  const fullSystemPrompt = [buildLegacySystemPrompt(userId), systemPrompt || ''].filter(Boolean).join('\n\n')
   let turns = 0
   const observations: string[] = []
 

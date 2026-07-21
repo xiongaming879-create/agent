@@ -134,7 +134,8 @@ describe('Agent Flow — Memory Extraction Hook', () => {
       [
         { role: 'user', content: 'Hello' },
         { role: 'assistant', content: 'Hello!' },
-      ]
+      ],
+      'test-user'
     )
   })
 

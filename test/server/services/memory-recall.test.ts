@@ -187,6 +187,26 @@ describe('Memory Recall - buildMemoryContext()', () => {
     const result = buildMemoryContext()
     expect(result).not.toContain('已提升的偏好不应出现')
   })
+
+  // ===== 新增：用户隔离（修复2）=====
+
+  it('buildMemoryContext(userId) 只注入该用户的规则', async () => {
+    await initMemoryDb()
+    createRule({ kind: 'user_preference_rule', rule: '用户1的偏好', promotion_reason: 'explicit', supporting_conversations: [], user_id: 'user-1' })
+    createRule({ kind: 'user_preference_rule', rule: '用户2的偏好', promotion_reason: 'explicit', supporting_conversations: [], user_id: 'user-2' })
+    const result = buildMemoryContext('user-1')
+    expect(result).toContain('用户1的偏好')
+    expect(result).not.toContain('用户2的偏好')
+  })
+
+  it('buildMemoryContext(userId) 只注入该用户的未提升候选', async () => {
+    await initMemoryDb()
+    createCandidate({ conversation_id: 'conv-a', type: 'user_preference', statement: '用户1的待验证偏好', durable: 0, user_id: 'user-1' })
+    createCandidate({ conversation_id: 'conv-b', type: 'user_preference', statement: '用户2的待验证偏好', durable: 0, user_id: 'user-2' })
+    const result = buildMemoryContext('user-1')
+    expect(result).toContain('用户1的待验证偏好')
+    expect(result).not.toContain('用户2的待验证偏好')
+  })
 })
 
 afterAll(() => {

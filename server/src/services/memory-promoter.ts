@@ -7,8 +7,8 @@ import {
 import { callLLM, stripMarkdownCodeFence, extractFirstJsonObject } from './llm-caller'
 import { MODEL_LIGHT } from './llm-config'
 
-export async function promoteCandidates(): Promise<{ promoted: number; kept: number }> {
-  const candidates = getUnpromotedCandidates()
+export async function promoteCandidates(userId?: string): Promise<{ promoted: number; kept: number }> {
+  const candidates = getUnpromotedCandidates(userId)
   if (candidates.length === 0) {
     return { promoted: 0, kept: 0 }
   }
@@ -18,7 +18,7 @@ export async function promoteCandidates(): Promise<{ promoted: number; kept: num
     const candidate = candidates[0]
     const result = evaluateGroup([candidate])
     if (result) {
-      createRule(result)
+      createRule({ ...result, user_id: userId ?? null })
       markCandidatePromoted(candidate.id)
       return { promoted: 1, kept: 0 }
     }
@@ -62,7 +62,7 @@ export async function promoteCandidates(): Promise<{ promoted: number; kept: num
         Array.from(memberConversations)
       )
       if (result) {
-        createRule(result)
+        createRule({ ...result, user_id: userId ?? null })
         // Mark all original candidates that contributed to this merged result
         for (const mid of merged.member_ids) {
           if (!promotedIds.has(mid)) {
@@ -82,7 +82,7 @@ export async function promoteCandidates(): Promise<{ promoted: number; kept: num
     for (const group of groups) {
       const result = evaluateGroup(group)
       if (result) {
-        createRule(result)
+        createRule({ ...result, user_id: userId ?? null })
         for (const gc of group) {
           if (!promotedIds.has(gc.id)) {
             markCandidatePromoted(gc.id)

@@ -124,6 +124,7 @@ router.post('/:conversationId/messages', async (req, res) => {
   const agentOptions: AgentOptions = {
     systemPrompt: conv?.system_prompt || undefined,
     complexity: complexity || 'medium',
+    userId: req.user!.userId,
   }
 
   await processAgentStream(res, contextMessages, agentOptions, (fullContent, thoughtSteps) => {
@@ -140,7 +141,8 @@ router.post('/:conversationId/messages', async (req, res) => {
   const allMessages = getMessages(req.params.conversationId)
   extractSessionMemories(
     req.params.conversationId,
-    allMessages.map(m => ({ role: m.role, content: m.content }))
+    allMessages.map(m => ({ role: m.role, content: m.content })),
+    req.user!.userId
   ).catch(err => console.warn('[Memory] Extraction failed:', err))
 })
 
@@ -203,6 +205,7 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
   const agentOptions: AgentOptions = {
     systemPrompt: conv?.system_prompt || undefined,
     complexity: complexity || 'medium',
+    userId: req.user!.userId,
   }
 
   await processAgentStream(res, contextMessages, agentOptions, (fullContent, thoughtSteps) => {
@@ -219,7 +222,8 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
   const allMessages = getMessages(req.params.conversationId)
   extractSessionMemories(
     req.params.conversationId,
-    allMessages.map(m => ({ role: m.role, content: m.content }))
+    allMessages.map(m => ({ role: m.role, content: m.content })),
+    req.user!.userId
   ).catch(err => console.warn('[Memory] Extraction failed:', err))
 })
 

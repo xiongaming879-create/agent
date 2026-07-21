@@ -12,6 +12,7 @@ import {
   markCandidatePromoted,
   createRule,
   getAllRules,
+  backfillMemoryUserIds,
 } from '../../../server/src/db/memory-db'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -260,6 +261,50 @@ describe('Memory Database — Rule CRUD', () => {
   it('getAllRules() 没有规则时返回空数组', () => {
     const rules = getAllRules()
     expect(rules).toEqual([])
+  })
+})
+
+describe('Memory Database - 用户隔离（user_id）', () => {
+  beforeEach(async () => {
+    if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB)
+    resetMemoryDb()
+    await initMemoryDb()
+  })
+
+  it('createCandidate 带 user_id 时正确写入', () => {
+    createCandidate({ conversation_id: 'conv-a', type: 'fact', statement: '事实', durable: 0, user_id: 'user-1' })
+    const db = getMemoryDb()
+    const result = db.exec('SELECT user_id FROM memory_candidates WHERE id = ?', ['conv-a#1'])
+    expect(result[0].values[0][0]).toBe('user-1')
+  })
+
+  it('getUnpromotedCandidates(userId) 只返回该用户的候选', () => {
+    createCandidate({ conversation_id: 'conv-a', type: 'fact', statement: 'A的候选', durable: 0, user_id: 'user-1' })
+    createCandidate({ conversation_id: 'conv-b', type: 'fact', statement: 'B的候选', durable: 0, user_id: 'user-2' })
+    const user1 = getUnpromotedCandidates('user-1')
+    expect(user1.length).toBe(1)
+    expect(user1[0].statement).toBe('A的候选')
+  })
+
+  it('getAllRules(userId) 只返回该用户的规则', () => {
+    createRule({ kind: 'user_preference_rule', rule: '用户1的规则', promotion_reason: 'explicit', supporting_conversations: [], user_id: 'user-1' })
+    createRule({ kind: 'user_preference_rule', rule: '用户2的规则', promotion_reason: 'explicit', supporting_conversations: [], user_id: 'user-2' })
+    const user1Rules = getAllRules('user-1')
+    expect(user1Rules.length).toBe(1)
+    expect(user1Rules[0].rule).toBe('用户1的规则')
+  })
+
+  it('backfillMemoryUserIds 通过 conversation_id 回填 user_id', () => {
+    const db = getMemoryDb()
+    db.run(
+      `INSERT INTO memory_candidates (id, conversation_id, type, statement, durable, promoted, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      ['conv-x#1', 'conv-x', 'fact', '老数据', 0, 0, new Date().toISOString(), null]
+    )
+    const result = backfillMemoryUserIds((convId) => convId === 'conv-x' ? 'backfilled-user' : null)
+    expect(result.candidates).toBe(1)
+    const cands = getUnpromotedCandidates('backfilled-user')
+    expect(cands.length).toBe(1)
+    expect(cands[0].statement).toBe('老数据')
   })
 })
 

@@ -6,6 +6,7 @@
 |------|------|------|
 | v1.0 | 2026-07-06 | 初版：四层记忆管道适配，3 张表（episodes/candidates/rules），抽取/晋升/召回三阶段 |
 | v1.1 | 2026-07-20 | 修复五层问题（L1-L5）：parseResponse 容错、extractor/promoter 标准化 callLLM、user_preference 单会话提升、recall 读 candidates、durable 判定标准 |
+| v1.2 | 2026-07-21 | 修复 LLM 不按 prompt 提取根因（消息构造方式）+ 解析重试 + 字段放宽 + 用户隔离（user_id 全链路 + 老数据回填） |
 
 ## 概述
 
@@ -16,6 +17,8 @@
 当前项目每次对话相互独立，Agent 没有跨会话的长期记忆。用户偏好、历史教训、关键事实无法在后续对话中被引用。Python 参考代码展示了一套完整的四层记忆整理方案，本项目将其核心层次简化适配。
 
 **v1.1 修复背景**：实际使用中发现"用户单次声明的个人偏好（如中午12-14点睡午觉）未被记住"，诊断出五层问题（见"修复历史"章节）。
+
+**v1.2 修复背景**：v1.1 后实测仍偶发偏好丢失。用真实 LLM 调用验证发现根因——`deepseek-v4-flash` 在直接用对话历史当 `messages` 时会"继续对话"（返回追问/续写）而非按 system prompt 提取记忆，导致 `parseResponse` 拿到的根本不是 JSON。同时发现记忆三张表无 `user_id` 字段，多用户场景下记忆全局共享，存在跨用户污染隐患。
 
 ## 技术选型
 
@@ -48,6 +51,7 @@ server/data/
 | summary | TEXT NOT NULL | 三句话以内概括本次会话做了什么、失败过什么、怎么修正的 |
 | candidate_count | INTEGER DEFAULT 0 | 本次会话抽取的候选记忆数 |
 | created_at | TEXT NOT NULL | ISO 时间戳 |
+| user_id | TEXT | v1.2 新增：所属用户 ID，用于用户隔离 |
 
 ### 表2: `memory_candidates` - 候选记忆
 
@@ -62,6 +66,7 @@ server/data/
 | durable | INTEGER DEFAULT 0 | 用户是否显式要求长期生效（0/1） |
 | promoted | INTEGER DEFAULT 0 | 是否已晋升为规则（0/1） |
 | created_at | TEXT NOT NULL | |
+| user_id | TEXT | v1.2 新增：所属用户 ID，用于用户隔离 |
 
 ### 表3: `memory_rules` - 已晋升的稳定规则
 
@@ -76,6 +81,7 @@ server/data/
 | supporting_conversations | TEXT | JSON 数组，支持的会话 ID 列表 |
 | created_at | TEXT NOT NULL | |
 | updated_at | TEXT NOT NULL | |
+| user_id | TEXT | v1.2 新增：所属用户 ID，用于用户隔离 |
 
 注：v1.1 的 `user_preference` 单会话提升复用 `explicit` 标签，不新增枚举值（遵守"禁止 DROP TABLE"原则，详见修复历史）。
 
@@ -86,23 +92,26 @@ server/data/
 在 SSE `done` 事件后触发（fire-and-forget，不阻塞用户响应）：
 
 1. 收集当前会话的全部消息（截断单条 > 2000 字符）
-2. 调用 `llm-caller.callLLM(truncatedMessages, EXTRACT_PROMPT, MODEL_LIGHT, 1024)`（v1.1 标准化：`system` 顶层字段，修复 L5）
-3. `parseResponse` 容错解析 LLM 返回（v1.1 修复 L1）：
+2. **v1.2 消息构造**：把对话拼成待分析文本，以"用户请求分析"的形式发送——`analysisMessages = [{ role: 'user', content: '请分析以下对话并提取记忆：\n\n用户: ...\n助手: ...' }]`。避免直接用对话历史当 messages（轻量模型会"继续对话"而非提取，这是 v1.1 丢失的根因）
+3. 调用 `llm-caller.callLLM(analysisMessages, EXTRACT_PROMPT, MODEL_LIGHT, 1024)`（v1.1 标准化：`system` 顶层字段）
+4. **v1.2 重试**：`extractWithRetry` 最多 2 次。第一次失败（API 异常或解析失败）时，第二次追加"请只返回纯 JSON 对象"的严格 prompt 重试。解析失败时打印 LLM 返回前 300 字方便排查
+5. `parseResponse` 容错解析（v1.1 修复 L1 + v1.2 放宽）：
    - 剥离 markdown 代码块包裹（`stripMarkdownCodeFence`）
    - 栈匹配提取第一个完整 JSON 对象（`extractFirstJsonObject`），字段顺序无关
+   - v1.2 放宽：`episode_summary` 缺失时用空串兜底（存为"(无摘要)"），只要有 `memory_items` 就保存；`durable` 字段容忍 boolean/number/字符串(`"true"`/`"1"`/`"是"`)；`type` 字段容忍大小写/中文前缀归一
    - JSON 失败时 fallback 到文本格式，兼容中英文冒号
-4. `EXTRACT_PROMPT` 的 durable 判定标准（v1.1 修复 L2）：
+6. `EXTRACT_PROMPT` 的 durable 判定标准（v1.1 修复 L2）：
    - `durable=true`：个人习惯、长期偏好、用户身份信息、明确要求记住
    - `durable=false`：一次性事实、临时信息
    - 即使用户顺带提到个人习惯（非会话主题），也提取为 user_preference + durable=true
-5. 将摘要写入 `memory_episodes`，候选写入 `memory_candidates`
-6. fire-and-forget 触发 `promoteCandidates()`
+7. 将摘要写入 `memory_episodes`，候选写入 `memory_candidates`（v1.2：均带 `user_id`）
+8. fire-and-forget 触发 `promoteCandidates(userId)`（v1.2：按用户隔离）
 
 ### 2. 跨会话晋升（Phase 3）
 
 晋升检查在每次新候选写入后触发（fire-and-forget）：
 
-1. 收集 `memory_candidates` 中 `promoted=0` 的候选
+1. 收集 `memory_candidates` 中 `promoted=0` 的候选（v1.2：按 `userId` 过滤，只处理当前用户的候选）
 2. 单候选：直接 `evaluateGroup`；多候选：先 `llmMergeCandidates`（v1.1 标准化 callLLM + 栈匹配 JSON）合并同义候选
 3. 对每条候选判断晋升条件（优先级顺序）：
 
@@ -120,8 +129,8 @@ server/data/
 
 在 Agent 构建 system prompt 时：
 
-1. 从 `memory_rules` 读取所有活跃规则
-2. 从 `memory_candidates` 读取 `promoted=0` 且 `type=user_preference` 的候选（v1.1 新增，最近 10 条）
+1. 从 `memory_rules` 读取所有活跃规则（v1.2：按 `userId` 过滤）
+2. 从 `memory_candidates` 读取 `promoted=0` 且 `type=user_preference` 的候选（v1.1 新增，最近 10 条；v1.2：按 `userId` 过滤）
 3. 在 system prompt 追加两节：
    ```
    ## 长期记忆（基于历史会话总结的规则）
@@ -224,6 +233,63 @@ server/data/
 | recall 读 candidates | 未提升偏好可见 | prompt 略有膨胀（限 10 条 + 仅 user_preference） |
 | 复用 explicit 标签 | 不改表结构，遵守禁止 DROP TABLE | 无法区分"明确要求记住"和"单会话偏好" |
 
+### v1.2 (2026-07-21): LLM 提取根因修复 + 用户隔离
+
+#### 问题诊断
+
+v1.1 后仍偶发偏好丢失。用真实 LLM 调用验证（对话含"我还有喜欢游泳和打羽毛球的爱好"）发现：
+
+- `deepseek-v4-flash` 第一次返回"现在请提供更多关于健身计划的具体信息..."（对话续写）
+- 重试后返回"这是否意味着你希望把游泳也加入其中？"（仍是对话续写）
+- 两次都不是 JSON -> `parseResponse` 返回 null -> 记忆丢失
+
+同时发现记忆三张表无 `user_id` 字段，`getAllRules()` / `getUnpromotedCandidates()` 全局查询，多用户场景下 test1 的偏好会注入给所有用户。
+
+#### 根因
+
+直接把对话历史当 `messages` 传给 LLM，最后一条是 assistant，轻量模型倾向"继续对话"而非"按 system prompt 提取记忆"。这才是 v1.1 `Failed to parse LLM response` 的真正主因--LLM 返回的是对话续写，不是格式不规范的 JSON。v1.1 的容错只处理了"格式乱"，没处理"根本不返回格式"。
+
+#### 修复方案
+
+**方案1（修复 LLM 不提取根因）：消息构造方式**
+- 不再直接用对话历史当 `messages`
+- 把对话拼成文本（`用户: ...\n助手: ...`），包在一条 `role: 'user'` 的"请分析以下对话并提取记忆"请求里
+- LLM 最后看到的是明确的提取请求，会按 system prompt 返回 JSON
+
+**方案2（增强容错）：解析重试 + 字段放宽**
+- `extractWithRetry`：第一次失败（API 异常或解析失败）时，追加"请只返回纯 JSON"的严格 prompt 重试一次
+- `parseResponse` 放宽：`episode_summary` 缺失用空串兜底（存为"(无摘要)"）；`durable` 容忍 boolean/number/字符串(`"true"`/`"1"`/`"是"`)；`type` 容忍大小写/中文前缀归一（如 `"Preference"` -> `user_preference`）
+- 解析失败打印 LLM 返回前 300 字，便于排查
+
+**方案3（用户隔离）：user_id 全链路**
+- 三张表 `ALTER TABLE ADD COLUMN user_id TEXT`（不 DROP，遵守删库保护；`runMigrations` 用 try-catch 忽略 duplicate column）
+- `createEpisode` / `createCandidate` / `createRule` 加 `user_id` 参数
+- `getAllRules(userId)` / `getUnpromotedCandidates(userId)` 按用户过滤
+- `extractSessionMemories` / `promoteCandidates` / `buildMemoryContext` 全部加 `userId` 参数
+- `AgentOptions` 加 `userId`，`message.ts` 从 `req.user!.userId` 取，经 `runRoutedAgent` 传到 5 条路径的 `buildMemoryContext(options.userId)`；legacy 路径同样传参
+- `backfillMemoryUserIds`：启动时通过 `conversation_id` 关联 `conversations` 表回填老数据的 `user_id`（rules 通过 `supporting_conversations[0]` 关联）
+
+#### 验收标准
+
+- 真实 LLM 调用：对话含"喜欢游泳和打羽毛球" -> 提取出 `user_preference` + `durable=1`（已实测验证，第一次调用即成功）
+- 第一次解析失败时重试，第二次成功则保存候选
+- `episode_summary` 缺失但有 `memory_items` 时仍保存（摘要兜底为"(无摘要)"）
+- `durable` 字段为字符串 `"true"` 时识别为 1
+- `type` 为 `"Preference"` 时归一为 `user_preference`
+- `getAllRules(userId)` / `getUnpromotedCandidates(userId)` 只返回该用户的数据
+- `buildMemoryContext(userId)` 只注入该用户的记忆
+- `promoteCandidates(userId)` 只处理该用户的候选
+- `backfillMemoryUserIds` 通过 `conversation_id` 回填 `user_id`
+
+#### Trade-offs
+
+| 维度 | 收益 | 代价 |
+|------|------|------|
+| 消息构造方式 | 根治 LLM 不提取问题，轻量模型也能按 prompt 工作 | 多一次字符串拼接，token 略增（可忽略） |
+| 解析重试 | LLM 偶发格式偏差时多一次机会 | 失败时多一次 LLM 调用（仅失败时） |
+| 字段放宽 | 容忍更多 LLM 输出变体 | 归一逻辑增加少量代码 |
+| 用户隔离 | 多用户记忆互不污染 | 老数据回填不了 user_id 的成为孤儿（conversation 已删），不再被注入--可接受 |
+
 ## 约束与注意事项
 
 - 独立 `memory.db` 文件，与 `agent.db` 共享 sql.js WASM 实例但独立 Database 对象
@@ -233,3 +299,7 @@ server/data/
 - 首次实现不处理规则删除/更新，后续可增加管理界面
 - **v1.1 约束**：不删除/重建 `memory_rules` 表（遵守"禁止 DROP TABLE"），`user_preference` 单会话提升复用 `explicit` 标签
 - **v1.1 约束**：所有 LLM 调用统一走 `llm-caller.callLLM`，`system` 作为顶层字段（修复 L5 隐患）
+- **v1.2 约束**：记忆抽取的消息必须以"用户请求分析"形式发送（对话拼成文本），不能直接用对话历史当 messages（轻量模型会继续对话而非提取）
+- **v1.2 约束**：三张表通过 `ALTER TABLE ADD COLUMN` 补 `user_id`，`runMigrations` 用 try-catch 忽略 duplicate column（不 DROP）
+- **v1.2 约束**：所有记忆读写必须传 `userId`，`buildMemoryContext(userId)` 在 5 条路由路径 + legacy 路径全部注入
+- **v1.2 约束**：老数据 `user_id` 为 NULL 时按 userId 过滤不返回（避免跨用户污染），启动时 `backfillMemoryUserIds` 尽力回填

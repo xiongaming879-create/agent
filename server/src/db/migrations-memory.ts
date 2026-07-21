@@ -24,4 +24,9 @@ export const memoryMigrations: string[] = [
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   )`,
+  // 用户隔离：三张表补 user_id 列。老库 ALTER 增列；新库 CREATE 后再 ALTER 会报
+  // "duplicate column name"，由 runMigrations 的 try-catch 安全忽略。遵守"禁止 DROP"原则。
+  `ALTER TABLE memory_episodes ADD COLUMN user_id TEXT`,
+  `ALTER TABLE memory_candidates ADD COLUMN user_id TEXT`,
+  `ALTER TABLE memory_rules ADD COLUMN user_id TEXT`,
 ]

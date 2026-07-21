@@ -26,6 +26,7 @@ interface ChatMessage {
 interface AgentOptions {
   systemPrompt?: string
   complexity?: Complexity
+  userId?: string
 }
 
 // ============================================================================
@@ -203,7 +204,7 @@ async function* runChitchat(messages: ChatMessage[], options: AgentOptions): Asy
 - 不需要使用任何工具
 - 适当使用 markdown 格式
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext()}`
+${buildMemoryContext(options.userId)}`
 
   yield* streamLLM(messages, prompt, MODEL_LIGHT)
 }
@@ -228,7 +229,7 @@ ${buildKnowledgeContext()}
 - 回答简洁清晰，适当使用 markdown
 - 事实性内容标注来源：【来源：内置知识库】
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext()}`
+${buildMemoryContext(options.userId)}`
 
   // 缓冲完整输出，检测 fallback 信号
   let fullOutput = ''
@@ -281,7 +282,7 @@ async function* runCalculation(messages: ChatMessage[], options: AgentOptions): 
 Available tools:
 ${toolList}
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext()}`
+${buildMemoryContext(options.userId)}`
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
   yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_LIGHT })
@@ -325,7 +326,7 @@ ${buildKnowledgeContext()}
 Available tools:
 ${toolList}
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext()}`
+${buildMemoryContext(options.userId)}`
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
   yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL })
@@ -370,7 +371,7 @@ ${buildKnowledgeContext()}
 Available tools:
 ${toolList}
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext()}`
+${buildMemoryContext(options.userId)}`
 
   const agent = createAgent(MODEL_STRONG, allLcTools, prompt)
   yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL })

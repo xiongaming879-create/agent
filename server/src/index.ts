@@ -5,8 +5,8 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-import { initDb, stopAutoSave } from './db'
-import { initMemoryDb } from './db/memory-db'
+import { initDb, stopAutoSave, getConversation } from './db'
+import { initMemoryDb, backfillMemoryUserIds } from './db/memory-db'
 import { seedAdmin } from './db/user'
 import conversationRouter from './routes/conversation'
 import messageRouter from './routes/message'
@@ -37,6 +37,12 @@ app.get('/api/mcp/status', (_req, res) => {
 async function start() {
   await initDb()
   await initMemoryDb()
+
+  // 回填老记忆数据的 user_id（用户隔离迁移）：通过 conversation_id 关联 conversations 表
+  const backfilled = backfillMemoryUserIds((convId) => getConversation(convId)?.user_id ?? null)
+  if (backfilled.episodes + backfilled.candidates + backfilled.rules > 0) {
+    console.log(`[Memory] Backfilled user_id: ${backfilled.episodes} episodes, ${backfilled.candidates} candidates, ${backfilled.rules} rules`)
+  }
 
   // Seed admin account
   const adminPassword = process.env.ADMIN_PASSWORD || 'Xiongam-1314'

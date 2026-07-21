@@ -260,6 +260,66 @@ describe('Memory Extractor - extractSessionMemories', () => {
     expect(body.system).toContain('个人习惯')
     expect(body.system).toContain('长期偏好')
   })
+
+  // ===== 新增：解析容错 + 重试（修复1）=====
+
+  it('第一次解析失败时重试，第二次成功则保存候选', async () => {
+    let callCount = 0
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      callCount++
+      const text = callCount === 1
+        ? '抱歉，我无法分析这段对话。'
+        : JSON.stringify({ episode_summary: '重试成功', memory_items: [{ type: 'user_preference', statement: '用户喜欢深色主题', durable: true }] })
+      return new Response(JSON.stringify({ content: [{ text }] }), { status: 200 })
+    })
+
+    await extractSessionMemories('conv-retry', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+
+    expect(callCount).toBe(2)
+    const db = getMemoryDb()
+    const candidates = db.exec('SELECT statement FROM memory_candidates')
+    expect(candidates[0].values[0][0]).toBe('用户喜欢深色主题')
+  })
+
+  it('episode_summary 缺失但有 memory_items 时仍保存候选（摘要兜底为"无摘要"）', async () => {
+    mockLLMResponse({
+      memory_items: [{ type: 'user_preference', statement: '用户偏好A', durable: true }],
+    })
+    await extractSessionMemories('conv-nosum', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const db = getMemoryDb()
+    const candidates = db.exec('SELECT statement FROM memory_candidates')
+    expect(candidates[0].values[0][0]).toBe('用户偏好A')
+    const episodes = db.exec('SELECT summary FROM memory_episodes')
+    expect(episodes[0].values[0][0]).toBe('(无摘要)')
+  })
+
+  it('durable 字段为字符串 "true" 时正确识别为 durable=1', async () => {
+    mockLLMTextResponse('{"episode_summary":"测试","memory_items":[{"type":"fact","statement":"事实","durable":"true"}]}')
+    await extractSessionMemories('conv-dur', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const db = getMemoryDb()
+    const candidates = db.exec('SELECT durable FROM memory_candidates')
+    expect(candidates[0].values[0][0]).toBe(1)
+  })
+
+  it('type 字段为 "Preference" 时归一为 user_preference', async () => {
+    mockLLMTextResponse('{"episode_summary":"测试","memory_items":[{"type":"Preference","statement":"偏好","durable":false}]}')
+    await extractSessionMemories('conv-type', [
+      { role: 'user', content: '测试' },
+      { role: 'assistant', content: '回复' },
+    ])
+    const db = getMemoryDb()
+    const candidates = db.exec('SELECT type FROM memory_candidates')
+    expect(candidates[0].values[0][0]).toBe('user_preference')
+  })
 })
 
 afterAll(() => {

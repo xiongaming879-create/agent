@@ -42,7 +42,13 @@ export async function initMemoryDb(): Promise<void> {
 function runMigrations(): void {
   const db = getMemoryDb()
   for (const sql of memoryMigrations) {
-    db.run(sql)
+    try {
+      db.run(sql)
+    } catch (e) {
+      // ALTER TABLE ADD COLUMN 在列已存在时报 "duplicate column name"，安全跳过。
+      // 这样新库（CREATE 时无 user_id）首次 ALTER 成功，重启后再 ALTER 也不会崩。
+      if (!String(e).includes('duplicate column name')) throw e
+    }
   }
   markMemoryDirty()
 }
@@ -73,6 +79,7 @@ export interface CreateEpisodeInput {
   conversation_id: string
   summary: string
   candidate_count?: number
+  user_id?: string | null
 }
 
 export function createEpisode(input: CreateEpisodeInput): { id: string } {
@@ -80,8 +87,8 @@ export function createEpisode(input: CreateEpisodeInput): { id: string } {
   const id = crypto.randomUUID()
   const now = new Date().toISOString()
   db.run(
-    `INSERT INTO memory_episodes (id, conversation_id, summary, candidate_count, created_at) VALUES (?, ?, ?, ?, ?)`,
-    [id, input.conversation_id, input.summary, input.candidate_count ?? 0, now]
+    `INSERT INTO memory_episodes (id, conversation_id, summary, candidate_count, created_at, user_id) VALUES (?, ?, ?, ?, ?, ?)`,
+    [id, input.conversation_id, input.summary, input.candidate_count ?? 0, now, input.user_id ?? null]
   )
   markMemoryDirty()
   return { id }
@@ -94,6 +101,7 @@ export interface CreateCandidateInput {
   type: 'user_preference' | 'fact' | 'lesson'
   statement: string
   durable?: number
+  user_id?: string | null
 }
 
 export function createCandidate(input: CreateCandidateInput): { id: string; promoted: number } {
@@ -109,8 +117,8 @@ export function createCandidate(input: CreateCandidateInput): { id: string; prom
   const id = `${input.conversation_id}#${nextIndex}`
 
   db.run(
-    `INSERT INTO memory_candidates (id, conversation_id, type, statement, durable, promoted, created_at) VALUES (?, ?, ?, ?, ?, 0, ?)`,
-    [id, input.conversation_id, input.type, input.statement, input.durable ?? 0, now]
+    `INSERT INTO memory_candidates (id, conversation_id, type, statement, durable, promoted, created_at, user_id) VALUES (?, ?, ?, ?, ?, 0, ?, ?)`,
+    [id, input.conversation_id, input.type, input.statement, input.durable ?? 0, now, input.user_id ?? null]
   )
   markMemoryDirty()
   return { id, promoted: 0 }
@@ -124,6 +132,7 @@ export interface Candidate {
   durable: number
   promoted: number
   created_at: string
+  user_id: string | null
 }
 
 function rowToCandidate(row: unknown[]): Candidate {
@@ -135,16 +144,22 @@ function rowToCandidate(row: unknown[]): Candidate {
     durable: row[4] as number,
     promoted: row[5] as number,
     created_at: row[6] as string,
+    user_id: (row[7] as string | null) ?? null,
   }
 }
 
-const CANDIDATE_COLS = 'id, conversation_id, type, statement, durable, promoted, created_at'
+const CANDIDATE_COLS = 'id, conversation_id, type, statement, durable, promoted, created_at, user_id'
 
-export function getUnpromotedCandidates(): Candidate[] {
+export function getUnpromotedCandidates(userId?: string): Candidate[] {
   const db = getMemoryDb()
-  const result = db.exec(
-    `SELECT ${CANDIDATE_COLS} FROM memory_candidates WHERE promoted = 0 ORDER BY created_at ASC`
-  )
+  const result = userId
+    ? db.exec(
+        `SELECT ${CANDIDATE_COLS} FROM memory_candidates WHERE promoted = 0 AND user_id = ? ORDER BY created_at ASC`,
+        [userId]
+      )
+    : db.exec(
+        `SELECT ${CANDIDATE_COLS} FROM memory_candidates WHERE promoted = 0 ORDER BY created_at ASC`
+      )
   if (!result[0]) return []
   return result[0].values.map(rowToCandidate)
 }
@@ -162,6 +177,7 @@ export interface CreateRuleInput {
   rule: string
   promotion_reason: 'cross_session' | 'failure_evidence' | 'explicit'
   supporting_conversations: string[]
+  user_id?: string | null
 }
 
 export function createRule(input: CreateRuleInput): { id: string } {
@@ -174,8 +190,8 @@ export function createRule(input: CreateRuleInput): { id: string } {
   const id = `rule_${nextNum}`
 
   db.run(
-    `INSERT INTO memory_rules (id, kind, rule, promotion_reason, supporting_conversations, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [id, input.kind, input.rule, input.promotion_reason, JSON.stringify(input.supporting_conversations), now, now]
+    `INSERT INTO memory_rules (id, kind, rule, promotion_reason, supporting_conversations, created_at, updated_at, user_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [id, input.kind, input.rule, input.promotion_reason, JSON.stringify(input.supporting_conversations), now, now, input.user_id ?? null]
   )
   markMemoryDirty()
   return { id }
@@ -189,6 +205,7 @@ export interface Rule {
   supporting_conversations: string[]
   created_at: string
   updated_at: string
+  user_id: string | null
 }
 
 function rowToRule(row: unknown[]): Rule {
@@ -200,14 +217,77 @@ function rowToRule(row: unknown[]): Rule {
     supporting_conversations: JSON.parse(row[4] as string),
     created_at: row[5] as string,
     updated_at: row[6] as string,
+    user_id: (row[7] as string | null) ?? null,
   }
 }
 
-const RULE_COLS = 'id, kind, rule, promotion_reason, supporting_conversations, created_at, updated_at'
+const RULE_COLS = 'id, kind, rule, promotion_reason, supporting_conversations, created_at, updated_at, user_id'
 
-export function getAllRules(): Rule[] {
+export function getAllRules(userId?: string): Rule[] {
   const db = getMemoryDb()
-  const result = db.exec(`SELECT ${RULE_COLS} FROM memory_rules ORDER BY created_at ASC`)
+  const result = userId
+    ? db.exec(`SELECT ${RULE_COLS} FROM memory_rules WHERE user_id = ? ORDER BY created_at ASC`, [userId])
+    : db.exec(`SELECT ${RULE_COLS} FROM memory_rules ORDER BY created_at ASC`)
   if (!result[0]) return []
   return result[0].values.map(rowToRule)
+}
+
+// --- 用户隔离：回填老数据的 user_id ---
+
+/**
+ * 回填 user_id 为 NULL 的记录。lookupUserId 回调把 conversation_id 映射到 userId
+ * （由调用方基于 agent.db 的 conversations 表提供）。rules 没有 conversation_id，
+ * 通过 supporting_conversations 的第一个 conversation_id 关联。
+ * 回填不了的记录（conversation 已删除 / supporting_conversations 为空）保持 NULL，
+ * 按 userId 过滤查询时不会返回，避免跨用户污染。
+ */
+export function backfillMemoryUserIds(
+  lookupUserId: (conversationId: string) => string | null
+): { episodes: number; candidates: number; rules: number } {
+  const db = getMemoryDb()
+  let episodes = 0
+  let candidates = 0
+  let rules = 0
+
+  const eps = db.exec(`SELECT id, conversation_id FROM memory_episodes WHERE user_id IS NULL`)
+  if (eps[0]) {
+    for (const row of eps[0].values) {
+      const uid = lookupUserId(row[1] as string)
+      if (uid) {
+        db.run(`UPDATE memory_episodes SET user_id = ? WHERE id = ?`, [uid, row[0]])
+        episodes++
+      }
+    }
+  }
+
+  const cands = db.exec(`SELECT id, conversation_id FROM memory_candidates WHERE user_id IS NULL`)
+  if (cands[0]) {
+    for (const row of cands[0].values) {
+      const uid = lookupUserId(row[1] as string)
+      if (uid) {
+        db.run(`UPDATE memory_candidates SET user_id = ? WHERE id = ?`, [uid, row[0]])
+        candidates++
+      }
+    }
+  }
+
+  const rls = db.exec(`SELECT id, supporting_conversations FROM memory_rules WHERE user_id IS NULL`)
+  if (rls[0]) {
+    for (const row of rls[0].values) {
+      let convIds: string[] = []
+      try {
+        convIds = JSON.parse(row[1] as string) as string[]
+      } catch {
+        convIds = []
+      }
+      const uid = convIds[0] ? lookupUserId(convIds[0]) : null
+      if (uid) {
+        db.run(`UPDATE memory_rules SET user_id = ? WHERE id = ?`, [uid, row[0]])
+        rules++
+      }
+    }
+  }
+
+  if (episodes + candidates + rules > 0) markMemoryDirty()
+  return { episodes, candidates, rules }
 }
