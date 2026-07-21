@@ -6,3 +6,10 @@ workspace/
 .playwright-mcp/
 .vscode/
 server/data/
+
+# IDE 配置（个人开发环境）
+.idea/
+
+# 运行时日志（启动脚本重定向产生）
+*.log
+*.err
