@@ -46,7 +46,7 @@
 | 网页解析 | cheerio | ^1.0.0 | search 工具 HTML 提取 |
 | 向量库 | Elasticsearch | 8.14.0 | BM25+kNN 混合检索 + IK 中文分词（Docker 部署） |
 | Embedding | 硅基流动 API | BAAI/bge-m3 | 1024 维向量 + bge-reranker-v2-m3 重排 |
-| PDF 解析 | pdf-parse | ^1.1 | 纯 JS PDF 文本提取（无 native 依赖） |
+| PDF 解析 | pdf-parse | ^2.4.5 | 纯 JS PDF 文本提取（v2 API，无 native 依赖） |
 | Schema | zod | ^4.4.3 | MCP 工具入参校验 |
 | 测试 | Vitest | ^4.1.8 | TDD 特征测试 |
 | 运行时 | tsx | ^4.19.0 | 服务端 TS 执行 |
@@ -202,7 +202,10 @@ npm run test:watch
 agent/
 ├── .mcp.json                         # MCP 服务器配置（5 个服务）
 ├── CLAUDE.md                         # Claude Code 开发指引
+├── ARCHITECTURE.md                   # 混合架构设计文档（StateGraph 迁移方案）
 ├── SPEC.md                           # 项目规格说明书
+├── docker-compose.yml                # Elasticsearch Docker Compose
+├── _start-all.ps1                    # Windows 开发一键启动脚本
 ├── vitest.config.ts                  # 测试配置
 ├── package.json                      # 根级测试依赖
 │
@@ -287,6 +290,7 @@ agent/
 │       │   ├── config.ts             # 读取 .mcp.json, MCP_CONFIG_PATH 覆盖
 │       │   └── client.ts             # MCP SDK 客户端: stdio/sse + 工具发现 + Zod 转换
 │       ├── data/                     # 运行时生成: agent.db / memory.db / avatars/
+│       ├── docker/                   # ES 自定义镜像（Dockerfile + IK 中文分词插件）
 │       └── workspace/                # 虚拟文件工作区根目录
 │
 ├── test/                             # 特征测试 (TDD)
@@ -572,16 +576,54 @@ sequenceDiagram
 flowchart TD
     A[start] --> B[initDb: 主库 agent.db<br/>异步加载 + 迁移 + 5s 自动存盘]
     B --> C[initMemoryDb: 记忆库 memory.db<br/>每次写立即存盘]
-    C --> D[seedAdmin: 创建 admin 账号<br/>bcrypt 哈希]
+    C --> C2[backfillMemoryUserIds<br/>回填老记忆数据的 user_id<br/>通过 conversation_id 关联]
+    C2 --> D[seedAdmin: 创建 admin 账号<br/>bcrypt 哈希]
     D --> E[readMcpConfig: .mcp.json]
     E --> F[initMcpClients: 顺序连接 5 个 MCP<br/>各产生 legacy Tool + LC Tool]
     F --> G[registerTools + registerLcTools<br/>合并内置 + MCP]
-    G --> H[app.listen :3001]
+    G --> G2[initEsClient + warmupEmbedding<br/>+ checkDiskWatermark<br/>失败不阻断, RAG 降级]
+    G2 --> H[app.listen :3001]
 
     I[SIGINT / SIGTERM] --> J[stopAutoSave: flush 主库]
     J --> K[closeAllMcpClients: 逐个关闭]
     K --> L[process.exit 0]
 ```
+
+### 8. RAG 索引流程
+
+`knowledge_search` 工具检索的"历史对话/记忆/已上传文档"三类数据，并非集中批量导入，而是散布在各业务流程中 fire-and-forget 异步写入 ES：
+
+```mermaid
+flowchart LR
+    subgraph 触发点
+        A[SSE done<br/>消息持久化后] --> B[indexConversationMessages<br/>每条消息作为单 chunk]
+        C[memory-extractor<br/>提取候选后] --> D[indexCandidate<br/>statement 整条]
+        E[memory-promoter<br/>提升规则后] --> F[indexRule<br/>rule 整条]
+        G[文档上传路由<br/>POST /api/documents] --> H[indexDocument<br/>分类型切块]
+    end
+
+    B --> I[rag-indexer<br/>hash 去重 + embed + bulk 写入]
+    D --> I
+    F --> I
+    H --> I
+
+    I --> J[(ES rag_index<br/>source_type 区分:<br/>message/candidate/rule/doc_chunk)]
+
+    K[knowledge_search 工具] --> L[hybridSearch<br/>BM25+kNN 融合 + rerank]
+    J --> L
+    L --> M[返回带来源 top3-5]
+```
+
+**索引接入点一览：**
+
+| 触发场景 | 调用位置 | source_type | 说明 |
+|---------|---------|-------------|------|
+| 对话结束 | `message.ts` SSE done 后 | `message` | 对话所有非 system 消息逐条索引 |
+| 记忆提取 | `memory-extractor.ts` | `candidate` | 每条候选记忆 statement 整条索引 |
+| 记忆提升 | `memory-promoter.ts` | `rule` | 提升后的 rule 整条索引 |
+| 文档上传 | `document.ts` POST 路由 | `doc_chunk` | 按类型切块（段落/代码/合同）+ overlap |
+
+所有索引操作均 catch 错误后 `console.warn`，不阻断主流程--ES 不可用时静默降级。
 
 ## API 端点
 
@@ -687,8 +729,14 @@ flowchart TD
 | EMBEDDING_AND_RERANK_API_KEY | - | ❌* | 硅基流动 API key（RAG 必需，不配则降级） |
 | EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | 硅基流动 base_url |
 | EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
+| EMBED_MAX_TOKENS | 8000 | ❌ | embedding 单次最大 token 估算 |
+| EMBED_BATCH_SIZE | 16 | ❌ | embedding 批量大小（分批防 429） |
+| EMBED_CONCURRENCY | 3 | ❌ | embedding 并发数（信号量限流） |
+| EMBED_RETRY_DELAY | 1000 | ❌ | 429 退避初始延迟（ms） |
 | RERANK_MODEL | BAAI/bge-reranker-v2-m3 | ❌ | rerank 模型 |
 | ES_URL | http://localhost:9200 | ❌* | ES 地址（RAG 必需） |
+| ES_USER | - | ❌ | ES 认证用户名（可选） |
+| ES_PASSWORD | - | ❌ | ES 认证密码（可选） |
 | RAG_INDEX | rag_index | ❌ | ES 索引名 |
 | RAG_SCORE_THRESHOLD | 0 | ❌ | rerank score 过滤阈值（低于此值的结果被过滤） |
 | ES_DISK_WARN_GB | 10 | ❌ | 磁盘水位告警阈值（GB） |
