@@ -106,7 +106,7 @@ async function createNew() {
 
     <div
       v-if="openMenu"
-      class="fixed z-50 bg-[#0A0A0A] rounded-lg ring-1 ring-white/10 text-[13px] overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
+      class="fixed z-50 w-max bg-[#0A0A0A] rounded-lg ring-1 ring-white/10 text-[13px] overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
       :style="{ left: openMenu.x + 'px', top: openMenu.y + 'px' }"
       @click.stop
     >
