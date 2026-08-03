@@ -21,6 +21,8 @@
 - **管理后台** - admin 角色可查看所有用户与其对话历史
 - **对话导出** - 支持 JSON / Markdown 格式导出
 - **事实核查** - Agent 回答完成后后置校验是否编造（仅记日志，不阻断）
+- **RAG 知识库检索** - Elasticsearch 8.x + 硅基流动 bge-m3 向量 + bge-reranker-v2-m3 重排，封装为 `knowledge_search` 工具，Agent 按需检索本地知识库（历史对话/记忆/已上传文档），BM25+kNN 加权融合 → rerank → 返回带来源标注的 top3-5
+- **文档上传与管理** - 支持 MD/TXT/PDF 文档上传，自动分类型切块+向量化+入库，前端文档管理 UI（上传/列表/删除）
 - **暗色主题** - Ethereal Glass 全局暗色设计风格
 
 ## 技术栈
@@ -42,6 +44,9 @@
 | 文件上传 | multer | ^2.2.0 | 头像上传 |
 | 数学计算 | mathjs + nerdamer | ^15 / ^1.1 | 计算器工具 |
 | 网页解析 | cheerio | ^1.0.0 | search 工具 HTML 提取 |
+| 向量库 | Elasticsearch | 8.14.0 | BM25+kNN 混合检索 + IK 中文分词（Docker 部署） |
+| Embedding | 硅基流动 API | BAAI/bge-m3 | 1024 维向量 + bge-reranker-v2-m3 重排 |
+| PDF 解析 | pdf-parse | ^1.1 | 纯 JS PDF 文本提取（无 native 依赖） |
 | Schema | zod | ^4.4.3 | MCP 工具入参校验 |
 | 测试 | Vitest | ^4.1.8 | TDD 特征测试 |
 | 运行时 | tsx | ^4.19.0 | 服务端 TS 执行 |
@@ -149,19 +154,34 @@ MCP_CONFIG_PATH=.mcp.json
 
 # Agent 实现
 USE_LANGCHAIN=true
+
+# RAG（不配则 RAG 降级，其他功能正常）
+EMBEDDING_AND_RERANK_API_KEY=your-siliconflow-api-key
+# EMBEDDING_BASE_URL=https://api.siliconflow.cn/v1
+# EMBED_MODEL=BAAI/bge-m3
+# RERANK_MODEL=BAAI/bge-reranker-v2-m3
+# ES_URL=http://localhost:9200
+# RAG_INDEX=rag_index
+# RAG_SCORE_THRESHOLD=0
 ```
 
 ### 启动开发服务
 
 ```bash
-# 启动后端（端口 3001，MCP 初始化需 15-20 秒）
+# 1. 启动 Elasticsearch（RAG 功能依赖，不启动则 RAG 降级，其他功能正常）
+docker compose up -d
+# ES 启动约 15-20 秒，访问 http://localhost:9200 验证
+
+# 2. 启动后端（端口 3001，MCP 初始化需 15-20 秒）
 cd server && npm run dev
 
-# 启动前端（端口 5173，已开启局域网访问）
+# 3. 启动前端（端口 5173，已开启局域网访问）
 cd client && npm run dev
 ```
 
 访问 http://localhost:5173，使用 admin 账号或注册新账号登录。
+
+> **RAG 降级说明**：未启动 ES 或未配 `EMBEDDING_AND_RERANK_API_KEY` 时，`knowledge_search` 工具和文档上传不可用，但 Agent 聊天、记忆、MCP 工具等功能正常。
 
 ### 运行测试
 
@@ -208,11 +228,13 @@ agent/
 │       │   ├── AdminSidebar.vue      # 管理员侧边栏（用户列表）
 │       │   ├── SettingsDialog.vue    # 主题/字号设置
 │       │   ├── ProfileDialog.vue     # 个人资料 + 头像 + 改密
-│       │   └── SidebarFooter.vue     # 侧边栏底部入口
+│       │   ├── SidebarFooter.vue     # 侧边栏底部入口
+│       │   └── DocumentManager.vue   # 文档管理（上传+列表+删除）
 │       ├── stores/
 │       │   ├── auth.ts               # JWT 登录/注册/me/设置/头像
 │       │   ├── conversation.ts       # 对话 CRUD + 置顶 + 归属
-│       │   └── message.ts            # 消息管理 + SSE 解析 + 打字机
+│       │   ├── message.ts            # 消息管理 + SSE 解析 + 打字机
+│       │   └── document.ts           # 文档 API（上传/列表/删除）
 │       ├── composables/
 │       │   ├── useKeyboard.ts        # 快捷键 (Ctrl+N / Ctrl+B)
 │       │   ├── useTheme.ts           # 主题应用
@@ -236,7 +258,8 @@ agent/
 │       │   ├── user.ts               # /api/user: settings/avatar/password
 │       │   ├── admin.ts              # /api/admin: users + 用户会话
 │       │   ├── conversation.ts       # /api/conversations: CRUD + 置顶 + 导出
-│       │   └── message.ts            # /api/conversations/:id/messages: SSE + 分支 + 重新生成
+│       │   ├── message.ts            # /api/conversations/:id/messages: SSE + 分支 + 重新生成
+│       │   └── document.ts           # /api/documents: 上传/列表/删除（multer + ES）
 │       ├── services/
 │       │   ├── agent.ts              # ReAct 入口: 切换 LangChain/Legacy + 事实核查
 │       │   ├── query-router.ts       # 查询分类 + 工具过滤 + 5 路径分发
@@ -247,12 +270,19 @@ agent/
 │       │   ├── tool-adapter.ts       # 内置 Tool → DynamicStructuredTool 包装
 │       │   ├── memory-extractor.ts   # 会话 → episode + candidates
 │       │   ├── memory-promoter.ts    # candidates → rules（含 LLM 合并）
-│       │   └── memory-recall.ts      # rules → system prompt 注入
+│       │   ├── memory-recall.ts      # rules → system prompt 注入
+│       │   ├── es-client.ts          # ES 连接 + index 初始化 + 磁盘水位监控
+│       │   ├── embedding-client.ts   # 硅基流动 embed/rerank（分批+并发+429退避）
+│       │   ├── rag-chunker.ts        # 分类型语义切块（段落/代码/合同 + overlap）
+│       │   ├── rag-indexer.ts        # 索引管道: doc_id 幂等 + hash 去重 + bulk
+│       │   ├── rag-search.ts         # 混合检索: BM25+kNN 加权融合 + rerank
+│       │   └── document-extractor.ts # MD/TXT/PDF 文本提取
 │       ├── tools/
 │       │   ├── index.ts              # 内置工具注册 + registerTools/registerLcTools
 │       │   ├── search.ts             # Bing 搜索 / URL 抓取 + cheerio 提取
 │       │   ├── filesystem.ts         # 虚拟工作区 + 路径穿越防护
-│       │   └── calculator.ts         # mathjs + nerdamer 高等数学
+│       │   ├── calculator.ts         # mathjs + nerdamer 高等数学
+│       │   └── knowledge-search.ts   # knowledge_search 工具（RAG 检索）
 │       ├── mcp/
 │       │   ├── config.ts             # 读取 .mcp.json, MCP_CONFIG_PATH 覆盖
 │       │   └── client.ts             # MCP SDK 客户端: stdio/sse + 工具发现 + Zod 转换
@@ -598,6 +628,14 @@ flowchart TD
 | PATCH | /:conversationId/messages/:messageId | Bearer | 编辑消息（创建分支，新 user 消息） |
 | POST | /:conversationId/messages/:messageId/regenerate | Bearer | 重新生成（SSE，基于原消息之前的历史） |
 
+### 文档管理 `/api/documents`
+
+| 方法 | 路径 | 鉴权 | 说明 |
+|------|------|------|------|
+| POST | /api/documents | Bearer | 上传文档（multer，MD/TXT/PDF，≤10MB，自动切块+向量化+入库） |
+| GET | /api/documents | Bearer | 文档列表（ES aggregation，按 doc_id 聚合） |
+| DELETE | /api/documents/:docId | Bearer | 删除文档（按 doc_id + user_id，delete_by_query） |
+
 ### 其他
 
 | 方法 | 路径 | 说明 |
@@ -646,6 +684,16 @@ flowchart TD
 | MCP_CONFIG_PATH | .mcp.json | ❌ | MCP 配置文件路径 |
 | WORKSPACE_ROOT | server/src/workspace | ❌ | 虚拟文件系统根目录 |
 | USE_LANGCHAIN | true | ❌ | `false` 回退 Legacy ReAct 实现 |
+| EMBEDDING_AND_RERANK_API_KEY | - | ❌* | 硅基流动 API key（RAG 必需，不配则降级） |
+| EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | 硅基流动 base_url |
+| EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
+| RERANK_MODEL | BAAI/bge-reranker-v2-m3 | ❌ | rerank 模型 |
+| ES_URL | http://localhost:9200 | ❌* | ES 地址（RAG 必需） |
+| RAG_INDEX | rag_index | ❌ | ES 索引名 |
+| RAG_SCORE_THRESHOLD | 0 | ❌ | rerank score 过滤阈值（低于此值的结果被过滤） |
+| ES_DISK_WARN_GB | 10 | ❌ | 磁盘水位告警阈值（GB） |
+
+> **❌\***：RAG 相关变量，不配置时 RAG 功能降级（knowledge_search 工具返回不可用提示，文档上传报错），其他功能不受影响。
 
 ## 内置工具
 
@@ -657,6 +705,7 @@ flowchart TD
 | filesystem_list | 相对目录路径 | 列出目录内容 |
 | filesystem_delete | 相对路径 | 删除文件/目录 |
 | calculator | JSON `{expression}` | 高等数学：四则/三角/对数/矩阵/求导/积分/方程求解（mathjs + nerdamer） |
+| knowledge_search | JSON `{query, docType?, tags?}` | RAG 检索本地知识库（历史对话/记忆/已上传文档），BM25+kNN+rerank，返回带来源 top3-5 |
 
 MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
 

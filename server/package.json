@@ -7,6 +7,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
+    "@elastic/elasticsearch": "^8.19.2",
     "@langchain/anthropic": "^1.4.1",
     "@langchain/core": "^1.1.49",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -19,6 +20,7 @@
     "mathjs": "^15.2.0",
     "multer": "^2.2.0",
     "nerdamer": "^1.1.13",
+    "pdf-parse": "^2.4.5",
     "sql.js": "^1.11.0",
     "zod": "^4.4.3"
   },

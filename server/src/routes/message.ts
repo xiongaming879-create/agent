@@ -3,6 +3,7 @@ import { getMessages, getMessagesByParent, createMessage, getMessage, getConvers
 import { authMiddleware } from '../middleware/auth'
 import { runAgent, type AgentOptions } from '../services/agent'
 import { extractSessionMemories } from '../services/memory-extractor'
+import { indexConversationMessages } from '../services/rag-indexer'
 import { tools } from '../tools'
 import type { AgentEvent, ThoughtStep } from '../types'
 
@@ -144,6 +145,8 @@ router.post('/:conversationId/messages', async (req, res) => {
     allMessages.map(m => ({ role: m.role, content: m.content })),
     req.user!.userId
   ).catch(err => console.warn('[Memory] Extraction failed:', err))
+  indexConversationMessages(req.params.conversationId, req.user!.userId)
+    .catch(err => console.warn('[RAG] indexConversationMessages failed:', err))
 })
 
 router.patch('/:conversationId/messages/:messageId', (req, res) => {
@@ -225,6 +228,8 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
     allMessages.map(m => ({ role: m.role, content: m.content })),
     req.user!.userId
   ).catch(err => console.warn('[Memory] Extraction failed:', err))
+  indexConversationMessages(req.params.conversationId, req.user!.userId)
+    .catch(err => console.warn('[RAG] indexConversationMessages failed:', err))
 })
 
 export default router

@@ -10,12 +10,15 @@ import { initMemoryDb, backfillMemoryUserIds } from './db/memory-db'
 import { seedAdmin } from './db/user'
 import conversationRouter from './routes/conversation'
 import messageRouter from './routes/message'
+import documentRouter from './routes/document'
 import authRouter from './routes/auth'
 import userRouter from './routes/user'
 import adminRouter from './routes/admin'
 import { readMcpConfig } from './mcp/config'
 import { initMcpClients, closeAllMcpClients, getMcpStatus } from './mcp/client'
 import { registerTools, registerLcTools } from './tools'
+import { initEsClient, getEsClient, checkDiskWatermark } from './services/es-client'
+import { warmupEmbedding } from './services/embedding-client'
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -29,6 +32,7 @@ app.use('/api/user', userRouter)
 app.use('/api/admin', adminRouter)
 app.use('/api/conversations', conversationRouter)
 app.use('/api/conversations', messageRouter)
+app.use('/api/documents', documentRouter)
 
 app.get('/api/mcp/status', (_req, res) => {
   res.json(getMcpStatus())
@@ -53,6 +57,30 @@ async function start() {
   const { tools: mcpTools, lcTools: mcpLcTools } = await initMcpClients(mcpConfig)
   registerTools(mcpTools)
   registerLcTools(mcpLcTools)
+
+  // RAG: ES 客户端 + embedding 预热 + 磁盘水位监控（失败不阻断主服务，RAG 是增强能力）
+  try {
+    await initEsClient()
+    await warmupEmbedding()
+    const diskCheck = await checkDiskWatermark(getEsClient())
+    if (diskCheck.warn) {
+      console.warn(`[RAG] 磁盘剩余 ${diskCheck.freeGb.toFixed(1)}GB,低于阈值 ${process.env.ES_DISK_WARN_GB || 10}GB`)
+    }
+    const diskMonitorTimer = setInterval(async () => {
+      try {
+        const check = await checkDiskWatermark(getEsClient())
+        if (check.warn) {
+          console.warn(`[RAG] 磁盘水位告警: 剩余 ${check.freeGb.toFixed(1)}GB`)
+        }
+      } catch {
+        // ES 不可用时静默
+      }
+    }, 5 * 60 * 1000)
+    process.on('SIGINT', () => clearInterval(diskMonitorTimer))
+    process.on('SIGTERM', () => clearInterval(diskMonitorTimer))
+  } catch (err) {
+    console.warn('[RAG] init failed, RAG degraded:', err instanceof Error ? err.message : String(err))
+  }
 
   app.listen(PORT, () => {
     console.log(`Agent server running on http://localhost:${PORT}`)

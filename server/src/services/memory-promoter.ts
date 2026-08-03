@@ -6,6 +6,7 @@ import {
 } from '../db/memory-db'
 import { callLLM, stripMarkdownCodeFence, extractFirstJsonObject } from './llm-caller'
 import { MODEL_LIGHT } from './llm-config'
+import { indexRule } from './rag-indexer'
 
 export async function promoteCandidates(userId?: string): Promise<{ promoted: number; kept: number }> {
   const candidates = getUnpromotedCandidates(userId)
@@ -18,7 +19,11 @@ export async function promoteCandidates(userId?: string): Promise<{ promoted: nu
     const candidate = candidates[0]
     const result = evaluateGroup([candidate])
     if (result) {
-      createRule({ ...result, user_id: userId ?? null })
+      const ruleRec = createRule({ ...result, user_id: userId ?? null })
+      if (userId) {
+        indexRule({ id: ruleRec.id, rule: result.rule, userId })
+          .catch(err => console.warn('[RAG] indexRule failed:', err))
+      }
       markCandidatePromoted(candidate.id)
       return { promoted: 1, kept: 0 }
     }
@@ -62,7 +67,11 @@ export async function promoteCandidates(userId?: string): Promise<{ promoted: nu
         Array.from(memberConversations)
       )
       if (result) {
-        createRule({ ...result, user_id: userId ?? null })
+        const ruleRec = createRule({ ...result, user_id: userId ?? null })
+        if (userId) {
+          indexRule({ id: ruleRec.id, rule: result.rule, userId })
+            .catch(err => console.warn('[RAG] indexRule failed:', err))
+        }
         // Mark all original candidates that contributed to this merged result
         for (const mid of merged.member_ids) {
           if (!promotedIds.has(mid)) {
@@ -82,7 +91,11 @@ export async function promoteCandidates(userId?: string): Promise<{ promoted: nu
     for (const group of groups) {
       const result = evaluateGroup(group)
       if (result) {
-        createRule({ ...result, user_id: userId ?? null })
+        const ruleRec = createRule({ ...result, user_id: userId ?? null })
+        if (userId) {
+          indexRule({ id: ruleRec.id, rule: result.rule, userId })
+            .catch(err => console.warn('[RAG] indexRule failed:', err))
+        }
         for (const gc of group) {
           if (!promotedIds.has(gc.id)) {
             markCandidatePromoted(gc.id)

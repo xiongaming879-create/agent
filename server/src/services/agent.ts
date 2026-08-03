@@ -8,7 +8,7 @@ import { buildMemoryContext } from './memory-recall'
 import { buildKnowledgeContext, buildDateContext } from './knowledge'
 import { ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, MODEL, MODEL_LIGHT, MODEL_STRONG } from './llm-config'
 import type { QueryCategory, Complexity } from './llm-config'
-import { runRoutedAgent } from './query-router'
+import { runRoutedAgent, PARALLEL_TOOL_RULES } from './query-router'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
@@ -102,6 +102,8 @@ function createLangchainAgent(systemPrompt?: string, userId?: string) {
 - 连续3次追问仍信息不全时，停止追问，基于已有信息给出可选方案供用户选择
 
 ${buildKnowledgeContext()}
+
+${PARALLEL_TOOL_RULES}
 
 ## 工具使用策略
 - **知识优先**：节假日、日期、常识性信息直接用内置知识，不要搜索
@@ -291,6 +293,8 @@ Answer: <最终答案>
 - 连续3次追问仍信息不全时，停止追问，基于已有信息给出可选方案供用户选择
 
 ${buildKnowledgeContext()}
+
+${PARALLEL_TOOL_RULES}
 
 ## 工具使用策略
 - **知识优先**：节假日、日期、常识性信息直接用内置知识，不要搜索

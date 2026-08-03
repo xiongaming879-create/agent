@@ -130,7 +130,7 @@ const TOOL_FILTERS: Record<QueryCategory, string[] | null> = {
   CHITCHAT: [],
   KNOWLEDGE: [],
   CALCULATION: ['calculator'],
-  SEARCH: ['search', 'fetch', 'browser_*'],
+  SEARCH: ['search', 'fetch', 'browser_*', 'knowledge_search'],
   COMPLEX: null,
 }
 
@@ -162,6 +162,27 @@ export function filterTools(
 export function getToolFilter(category: QueryCategory): string[] | null {
   return TOOL_FILTERS[category]
 }
+
+// ============================================================================
+// 强制轮次管控规则（强制并行工具调用，减少串行轮次）
+// ============================================================================
+
+export const PARALLEL_TOOL_RULES = `# 【强制轮次管控规则，必须严格遵守】
+1. 无依赖的独立查询**必须在单轮一次性并行调用多个工具**，禁止逐个串行调用占用多轮：
+   - 多条关键词搜索 -> 一轮多个search并行
+   - search返回多条有效URL -> 一轮多个fetch并行抓取
+   - 多文件读取/多数学表达式计算 -> 批量调用
+2. 工具依赖仅允许必要串行：search -> 批量fetch；browser_navigate后批量交互
+3. 单轮最多发起8个并行工具调用，超出则拆分为下一轮，但尽可能合并
+4. 同一关键词/同一URL连续调用2次判定为无效循环，禁止再次调用
+5. 每一轮思考必须输出判断：【当前信息是否足以完整回答用户问题：是/否】，判定为"是"立即终止所有工具调用直接输出答案`
+
+const RAG_PROMPT_CONSTRAINTS = `
+## 知识库检索约束(knowledge_search 被调用时生效)
+- 只允许使用检索到的上下文内容回答,禁止推理、猜测、补充外部知识
+- 上下文无答案时统一回复:"知识库中未查询到相关内容,无法解答该问题"
+- 引用答案必须标注来源:文档名 + 页码(如【来源:xxx.pdf p12】)
+- 检索结果不超过 5 条,不要堆砌无关内容`
 
 // ============================================================================
 // Helpers: LangChain agent 创建 + 工具列表文本
@@ -270,6 +291,8 @@ async function* runCalculation(messages: ChatMessage[], options: AgentOptions): 
 
 你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。用与用户相同的语言回复。
 
+${PARALLEL_TOOL_RULES}
+
 ## 数学计算
 - 遇到中文/白话文数学题时，先在思考中将题目转为标准数学表达式，再调用 calculator
 - 例如："根号5加根号9" -> sqrt(5)+sqrt(9)，"x²的导数" -> derivative('x^2','x')
@@ -294,7 +317,7 @@ ${buildMemoryContext(options.userId)}`
 
 async function* runSearch(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
   const allLcTools = getAllLcTools()
-  const filteredTools = filterTools(allLcTools, ['search', 'fetch', 'browser_*'])
+  const filteredTools = filterTools(allLcTools, ['search', 'fetch', 'browser_*', 'knowledge_search'])
   const toolList = buildToolListFromLcTools(filteredTools)
 
   const prompt = `${buildDateContext()}
@@ -302,6 +325,8 @@ async function* runSearch(messages: ChatMessage[], options: AgentOptions): Async
 ${buildKnowledgeContext()}
 
 你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。用与用户相同的语言回复。
+
+${PARALLEL_TOOL_RULES}
 
 ## 工具使用策略
 - **按需搜索**：仅当需要实时信息才调用 search/fetch
@@ -312,16 +337,19 @@ ${buildKnowledgeContext()}
   - 搜索类工具总调用不超过 25 次，重复相同输入会被强制拦截
 - **搜索容错**：
   - search 超时 -> 简化关键词重试 -> 再失败用已有信息继续
+- **本地知识库优先**：用户问已上传文档/历史问答时,先调 knowledge_search 检索本地知识库,无命中再联网
 - **工具选择优先级**：
-  1. search：搜索关键词，获取结果 + URL
-  2. fetch：只在 search 返回具体 URL 后抓取详情，不要猜测 URL
-  3. browser_*：仅当页面需要 JS 渲染时才用
+  1. knowledge_search：检索本地知识库(历史对话/记忆/已上传文档)
+  2. search：搜索关键词，获取结果 + URL
+  3. fetch：只在 search 返回具体 URL 后抓取详情，不要猜测 URL
+  4. browser_*：仅当页面需要 JS 渲染时才用
 
 ## 回答要求
 - 基于工具返回内容组织回答，不要编造
 - 无法确定时明确说明
 - 事实性内容标注来源：【来源：xxx】
 - 适当使用 markdown 格式
+${RAG_PROMPT_CONSTRAINTS}
 
 Available tools:
 ${toolList}
@@ -329,7 +357,7 @@ ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
 ${buildMemoryContext(options.userId)}`
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
-  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL })
+  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId })
 }
 
 // ============================================================================
@@ -350,13 +378,16 @@ ${buildKnowledgeContext()}
 - 检查关键信息是否缺失、需求是否模糊
 - 若信息不足，直接向用户提问，不要调用工具
 
+${PARALLEL_TOOL_RULES}
+
 ## 工具使用策略
 - **知识优先**：节假日、日期、常识性信息直接用内置知识，不要搜索
 - **按需搜索**：仅当需要实时信息才调用 search/fetch
 - **并行调用**：多个独立的搜索/抓取可以同一轮并行调用
 - **适时停止**：获取到足够信息后立即综合回答，不要用相同关键词反复搜索
 - **搜索容错**：search 超时 -> 简化关键词重试 -> 再失败用已有信息继续
-- **工具选择优先级**：search 搜关键词 -> fetch 抓 URL -> browser_ 仅用于 JS 渲染页面
+- **本地知识库**：用户问已上传文档/历史问答时,调 knowledge_search 检索本地知识库
+- **工具选择优先级**：knowledge_search 查本地 -> search 搜关键词 -> fetch 抓 URL -> browser_ 仅用于 JS 渲染页面
 
 ## 数学计算
 - 遇到中文/白话文数学题时，先转为标准数学表达式，再调用 calculator
@@ -367,6 +398,7 @@ ${buildKnowledgeContext()}
 - 基于工具返回内容和内置知识组织回答，不要编造
 - 事实性内容标注来源
 - 无法确定时明确说明
+${RAG_PROMPT_CONSTRAINTS}
 
 Available tools:
 ${toolList}
@@ -374,7 +406,7 @@ ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
 ${buildMemoryContext(options.userId)}`
 
   const agent = createAgent(MODEL_STRONG, allLcTools, prompt)
-  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL })
+  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId })
 }
 
 // ============================================================================

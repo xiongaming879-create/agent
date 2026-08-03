@@ -10,6 +10,7 @@ interface ChatMessage {
 export interface AgentRunOptions {
   maxIterations: number
   systemPrompt?: string
+  userId?: string
 }
 
 function detectStuckPattern(observations: string[], threshold: number = 3): boolean {
@@ -32,29 +33,32 @@ function normalizeToolInput(input: string): string {
 }
 
 /** Whether a tool is a "search-type" tool that retrieves external info. */
-function isSearchTypeTool(toolName: string): boolean {
-  return /^(search|fetch|browser_navigate|browser_snapshot|browser_click|browser_type|browser_fill|browser_take_screenshot)/i.test(toolName)
+export function isSearchTypeTool(toolName: string): boolean {
+  return /^(search|knowledge_search|fetch|browser_navigate|browser_snapshot|browser_click|browser_type|browser_fill|browser_take_screenshot)/i.test(toolName)
 }
 
-interface SearchState {
+export interface SearchState {
   searchCallCount: number         // 搜索类工具调用总次数
+  knowledgeSearchCallCount: number // knowledge_search 单独计数(本地检索不该反复调)
   seenInputs: Map<string, number> // 记录重复输入
 }
 
-function createSearchState(): SearchState {
+export function createSearchState(): SearchState {
   return {
     searchCallCount: 0,
+    knowledgeSearchCallCount: 0,
     seenInputs: new Map(),
   }
 }
 
 const MAX_SEARCH_CALLS = 25  // 搜索类工具总调用上限
+const MAX_KNOWLEDGE_SEARCH_CALLS = 5  // 本地知识库检索上限(本地检索不该反复调)
 
 /**
  * 简化版停止检测：只看总次数 + 完全相同输入重复。
  * 不过度干预模型的搜索策略，让模型自己判断何时该停。
  */
-function checkSearchEffectiveness(
+export function checkSearchEffectiveness(
   toolName: string,
   toolInput: string,
   _output: string,
@@ -64,7 +68,12 @@ function checkSearchEffectiveness(
     return { shouldStop: false, reason: null }
   }
 
-  state.searchCallCount++
+  const isKnowledge = toolName === 'knowledge_search'
+  if (isKnowledge) {
+    state.knowledgeSearchCallCount++
+  } else {
+    state.searchCallCount++
+  }
 
   // 完全相同的输入重复调用 -> 死循环，立即停止
   const inputKey = `${toolName}:${normalizeToolInput(toolInput)}`
@@ -74,9 +83,11 @@ function checkSearchEffectiveness(
     return { shouldStop: true, reason: `重复调用 ${toolName}(${toolInput.slice(0, 50)})` }
   }
 
-  // 总次数兜底
-  if (state.searchCallCount > MAX_SEARCH_CALLS) {
-    return { shouldStop: true, reason: `搜索类工具调用 ${state.searchCallCount} 次超过上限 ${MAX_SEARCH_CALLS}` }
+  // 总次数兜底:knowledge_search 用更小上限
+  const count = isKnowledge ? state.knowledgeSearchCallCount : state.searchCallCount
+  const limit = isKnowledge ? MAX_KNOWLEDGE_SEARCH_CALLS : MAX_SEARCH_CALLS
+  if (count > limit) {
+    return { shouldStop: true, reason: `${toolName} 调用 ${count} 次超过上限 ${limit}` }
   }
 
   return { shouldStop: false, reason: null }
@@ -118,7 +129,7 @@ export async function* langchainAgentRunner(
   try {
     const stream = await agent.stream(
       { messages: inputMessages },
-      { recursionLimit: options.maxIterations }
+      { recursionLimit: options.maxIterations, configurable: { userId: options.userId } }
     )
 
     for await (const chunk of stream) {

@@ -2,6 +2,7 @@
 import { ref } from 'vue'
 import { useConversationStore } from '../stores/conversation'
 import type { Conversation } from '../types'
+import DocumentManager from './DocumentManager.vue'
 
 defineProps<{
   embedded?: boolean
@@ -11,6 +12,7 @@ defineProps<{
 const store = useConversationStore()
 
 const showDeleteConfirm = ref(false)
+const showDocManager = ref(false)
 const deleteTargetId = ref<string | null>(null)
 const openMenu = ref<{ convId: string; x: number; y: number; isPinned: boolean } | null>(null)
 const pinError = ref('')
@@ -84,6 +86,13 @@ async function createNew() {
       </div>
     </div>
 
+    <div v-if="!collapsed" class="px-4 py-2 border-t border-white/5">
+      <button
+        class="w-full text-left text-[13px] text-white/40 hover:text-white/70 transition-colors"
+        @click="showDocManager = true"
+      >📄 文档管理</button>
+    </div>
+
     <div
       v-if="openMenu"
       class="fixed z-50 bg-[#0A0A0A] rounded-lg ring-1 ring-white/10 text-[13px] overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
@@ -116,6 +125,14 @@ async function createNew() {
               @click="doDelete"
             >删除</button>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showDocManager" class="fixed inset-0 bg-black/60 backdrop-blur-xl flex items-center justify-center z-50" @click="showDocManager = false">
+      <div class="bg-white/5 ring-1 ring-white/10 p-1.5 rounded-[1.5rem]" @click.stop>
+        <div class="bg-[#0A0A0A] rounded-[1.25rem] shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)] w-[360px] h-[480px] flex flex-col">
+          <DocumentManager @close="showDocManager = false" />
         </div>
       </div>
     </div>

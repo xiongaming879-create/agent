@@ -1,4 +1,5 @@
 import { createEpisode, createCandidate } from '../db/memory-db'
+import { indexCandidate } from './rag-indexer'
 import { promoteCandidates } from './memory-promoter'
 import { callLLM, stripMarkdownCodeFence, extractFirstJsonObject } from './llm-caller'
 import { MODEL_LIGHT } from './llm-config'
@@ -84,13 +85,17 @@ export async function extractSessionMemories(
 
   // Save each memory candidate
   for (const item of parsed.memory_items) {
-    createCandidate({
+    const candidate = createCandidate({
       conversation_id: conversationId,
       type: item.type,
       statement: item.statement,
       durable: item.durable ? 1 : 0,
       user_id: userId ?? null,
     })
+    if (userId) {
+      indexCandidate({ id: candidate.id, statement: item.statement, userId })
+        .catch(err => console.warn('[RAG] indexCandidate failed:', err))
+    }
   }
 
   // Fire-and-forget promotion check

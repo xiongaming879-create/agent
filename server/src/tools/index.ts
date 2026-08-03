@@ -3,6 +3,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools'
 import { searchTool } from './search'
 import { readFile, writeFile, listDir, deleteFile } from './filesystem'
 import { calculatorTool } from './calculator'
+import { knowledgeSearchTool } from './knowledge-search'
 
 const builtInTools: Tool[] = [
   {
@@ -43,7 +44,7 @@ const builtInTools: Tool[] = [
 ]
 
 // DynamicStructuredTool instances (native LangChain tools, skip adapter wrapping)
-export const lcTools: DynamicStructuredTool<Record<string, unknown>>[] = [calculatorTool]
+export const lcTools: DynamicStructuredTool<Record<string, unknown>>[] = [calculatorTool, knowledgeSearchTool]
 
 export const tools: Tool[] = [...builtInTools]
 
