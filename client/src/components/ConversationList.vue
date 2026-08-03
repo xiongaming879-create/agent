@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useConversationStore } from '../stores/conversation'
-import type { Conversation } from '../types'
+import type { Conversation, ExportFormat } from '../types'
 import DocumentManager from './DocumentManager.vue'
 
 defineProps<{
@@ -16,6 +16,7 @@ const showDocManager = ref(false)
 const deleteTargetId = ref<string | null>(null)
 const openMenu = ref<{ convId: string; x: number; y: number; isPinned: boolean } | null>(null)
 const pinError = ref('')
+const exportError = ref('')
 
 function toggleMenu(e: MouseEvent, conv: Conversation) {
   e.stopPropagation()
@@ -45,6 +46,16 @@ function handleDelete(convId: string) {
   closeMenu()
   deleteTargetId.value = convId
   showDeleteConfirm.value = true
+}
+
+async function handleExport(convId: string, format: ExportFormat) {
+  closeMenu()
+  try {
+    await store.exportConversation(convId, format)
+  } catch (err: unknown) {
+    exportError.value = err instanceof Error ? err.message : '导出失败'
+    setTimeout(() => { exportError.value = '' }, 1500)
+  }
 }
 
 async function doDelete() {
@@ -106,6 +117,14 @@ async function createNew() {
       >{{ openMenu.isPinned ? '取消置顶' : '置顶对话' }}</button>
       <button
         class="w-full px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
+        @click="handleExport(openMenu.convId, 'md')"
+      >导出 Markdown</button>
+      <button
+        class="w-full px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
+        @click="handleExport(openMenu.convId, 'json')"
+      >导出 JSON</button>
+      <button
+        class="w-full px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
         @click="handleDelete(openMenu.convId)"
       >删除</button>
     </div>
@@ -141,5 +160,10 @@ async function createNew() {
       v-if="pinError"
       class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-white/10 ring-1 ring-white/10 text-white/70 text-[13px] px-4 py-2 rounded-lg z-50"
     >{{ pinError }}</div>
+
+    <div
+      v-if="exportError"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-white/10 ring-1 ring-white/10 text-white/70 text-[13px] px-4 py-2 rounded-lg z-50"
+    >{{ exportError }}</div>
   </div>
 </template>

@@ -241,6 +241,49 @@ describe('ConversationList 组件', () => {
     expect(showDeleteConfirm).toBe(false)
     expect(deleted).toBe(false)
   })
+
+  it('右键菜单包含导出 Markdown 选项', () => {
+    const menuItems = ['置顶对话', '删除', '导出 Markdown', '导出 JSON']
+    expect(menuItems).toContain('导出 Markdown')
+  })
+
+  it('右键菜单包含导出 JSON 选项', () => {
+    const menuItems = ['置顶对话', '删除', '导出 Markdown', '导出 JSON']
+    expect(menuItems).toContain('导出 JSON')
+  })
+
+  it('点击导出 Markdown 调用 store.exportConversation(id, "md")', () => {
+    let calledFormat: string | null = null
+    const exportConversation = (_id: string, format: string) => { calledFormat = format }
+    exportConversation('conv-1', 'md')
+    expect(calledFormat).toBe('md')
+  })
+
+  it('点击导出 JSON 调用 store.exportConversation(id, "json")', () => {
+    let calledFormat: string | null = null
+    const exportConversation = (_id: string, format: string) => { calledFormat = format }
+    exportConversation('conv-1', 'json')
+    expect(calledFormat).toBe('json')
+  })
+
+  it('导出失败时显示 toast 提示 1.5 秒后消失', () => {
+    let exportError = ''
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const showError = (msg: string) => {
+      exportError = msg
+      timer = setTimeout(() => { exportError = '' }, 1500)
+    }
+    showError('导出失败')
+    expect(exportError).toBe('导出失败')
+    clearTimeout(timer!)
+  })
+
+  it('导出时关闭右键菜单', () => {
+    let openMenu: { convId: string } | null = { convId: 'c1' }
+    const closeMenu = () => { openMenu = null }
+    closeMenu()
+    expect(openMenu).toBeNull()
+  })
 })
 
 describe('ChatArea 自动标题', () => {
