@@ -106,25 +106,25 @@ async function createNew() {
 
     <div
       v-if="openMenu"
-      class="fixed z-50 w-max bg-[#0A0A0A] rounded-lg ring-1 ring-white/10 text-[13px] overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
+      class="fixed z-50 bg-[#0A0A0A] rounded-lg ring-1 ring-white/10 text-[13px] overflow-hidden shadow-[0_8px_32px_rgba(0,0,0,0.5)]"
       :style="{ left: openMenu.x + 'px', top: openMenu.y + 'px' }"
       @click.stop
     >
       <button
-        class="w-full px-6 py-2.5 text-center hover:bg-white/10 transition-colors"
+        class="block whitespace-nowrap px-6 py-2.5 text-center hover:bg-white/10 transition-colors"
         :class="openMenu.isPinned ? 'text-red-400/80' : 'text-emerald-400/80'"
         @click="handlePin(store.conversations.find(c => c.id === openMenu?.convId)!)"
       >{{ openMenu.isPinned ? '取消置顶' : '置顶对话' }}</button>
       <button
-        class="w-full px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
+        class="block whitespace-nowrap px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
         @click="handleExport(openMenu.convId, 'md')"
       >导出 Markdown</button>
       <button
-        class="w-full px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
+        class="block whitespace-nowrap px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
         @click="handleExport(openMenu.convId, 'json')"
       >导出 JSON</button>
       <button
-        class="w-full px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
+        class="block whitespace-nowrap px-6 py-2.5 text-center text-white/50 hover:bg-white/10 transition-colors"
         @click="handleDelete(openMenu.convId)"
       >删除</button>
     </div>
