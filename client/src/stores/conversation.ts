@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Conversation } from '../types'
+import type { Conversation, ExportFormat } from '../types'
 import { authFetch } from '../utils/fetch'
 
 const API = '/api/conversations'
@@ -77,9 +77,29 @@ export const useConversationStore = defineStore('conversation', () => {
     }
   }
 
+  async function exportConversation(id: string, format: ExportFormat): Promise<void> {
+    const res = await authFetch(`${API}/${id}/export?format=${format}`)
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({ error: '导出失败' }))
+      throw new Error(data.error || '导出失败')
+    }
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const conv = conversations.value.find(c => c.id === id)
+    const safeTitle = (conv?.title || 'conversation').replace(/[\/\\:*?"<>|]/g, '_')
+    const ext = format === 'md' ? 'md' : 'json'
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${safeTitle}.${ext}`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
+
   function setActive(id: string | null) {
     activeId.value = id
   }
 
-  return { conversations, activeId, fetchAll, fetchByUserId, create, update, remove, setActive, togglePin }
+  return { conversations, activeId, fetchAll, fetchByUserId, create, update, remove, setActive, togglePin, exportConversation }
 })

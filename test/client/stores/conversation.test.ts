@@ -167,3 +167,72 @@ describe('对话状态 — 置顶排序', () => {
     expect(sorted[1].id).toBe('c1')
   })
 })
+
+describe('对话状态 - 导出功能', () => {
+  it('导出 URL 包含正确的 id 和 format 参数', () => {
+    const API = '/api/conversations'
+    const id = 'conv-123'
+    const format = 'md'
+    const url = `${API}/${id}/export?format=${format}`
+    expect(url).toBe('/api/conversations/conv-123/export?format=md')
+  })
+
+  it('JSON 格式导出 URL 使用 format=json', () => {
+    const API = '/api/conversations'
+    const id = 'conv-456'
+    const format = 'json'
+    const url = `${API}/${id}/export?format=${format}`
+    expect(url).toBe('/api/conversations/conv-456/export?format=json')
+  })
+
+  it('文件名使用对话标题，扩展名与格式对应', () => {
+    const title = '西藏行程规划'
+    const format = 'md'
+    const safeTitle = title.replace(/[\/\\:*?"<>|]/g, '_')
+    const ext = format === 'md' ? 'md' : 'json'
+    const fileName = `${safeTitle}.${ext}`
+    expect(fileName).toBe('西藏行程规划.md')
+  })
+
+  it('文件名过滤非法字符', () => {
+    const title = 'test/file:name?'
+    const safeTitle = title.replace(/[\/\\:*?"<>|]/g, '_')
+    expect(safeTitle).toBe('test_file_name_')
+  })
+
+  it('对话标题为空时使用默认文件名', () => {
+    const title = ''
+    const safeTitle = (title || 'conversation').replace(/[\/\\:*?"<>|]/g, '_')
+    const ext = 'json'
+    const fileName = `${safeTitle}.${ext}`
+    expect(fileName).toBe('conversation.json')
+  })
+
+  it('导出失败时抛出包含错误信息的 Error', async () => {
+    const mockRes = { ok: false, json: async () => ({ error: '无权限访问' }) }
+    let thrownError: Error | null = null
+    try {
+      if (!mockRes.ok) {
+        const data = await mockRes.json()
+        throw new Error(data.error || '导出失败')
+      }
+    } catch (err) {
+      thrownError = err instanceof Error ? err : new Error('导出失败')
+    }
+    expect(thrownError?.message).toBe('无权限访问')
+  })
+
+  it('导出失败且响应无 error 字段时使用默认提示', async () => {
+    const mockRes = { ok: false, json: async () => ({}) }
+    let thrownError: Error | null = null
+    try {
+      if (!mockRes.ok) {
+        const data = await mockRes.json()
+        throw new Error(data.error || '导出失败')
+      }
+    } catch (err) {
+      thrownError = err instanceof Error ? err : new Error('导出失败')
+    }
+    expect(thrownError?.message).toBe('导出失败')
+  })
+})

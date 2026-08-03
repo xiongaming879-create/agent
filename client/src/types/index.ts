@@ -11,6 +11,8 @@ export interface User {
 
 export type Complexity = 'fast' | 'medium' | 'deep'
 
+export type ExportFormat = 'md' | 'json'
+
 export interface Conversation {
   id: string
   title: string
