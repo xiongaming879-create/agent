@@ -37,6 +37,7 @@ export interface Message {
   role: 'user' | 'assistant' | 'system'
   content: string
   thought_steps: ThoughtStep[]
+  warning?: string
   created_at: string
 }
 
@@ -47,4 +48,5 @@ export type AgentEvent =
   | { type: 'observation'; content: string }
   | { type: 'content'; content: string }
   | { type: 'content_delta'; content: string }
+  | { type: 'warning'; content: string }
   | { type: 'done' }

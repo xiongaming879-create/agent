@@ -114,6 +114,7 @@ router.delete('/:docId', async (req, res) => {
     const client = getEsClient()
     await client.deleteByQuery({
       index: RAG_INDEX,
+      refresh: true,
       conflicts: 'proceed',
       query: {
         bool: {

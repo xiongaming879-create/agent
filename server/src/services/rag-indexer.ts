@@ -156,6 +156,30 @@ export async function indexRule(input: {
   })
 }
 
+/** 按 source_id 批量删除 ES 文档（删对话时级联清理 message/candidate） */
+export async function deleteEsBySourceIds(
+  userId: string,
+  sourceIds: string[],
+  options?: { sourceType?: string }
+): Promise<number> {
+  if (sourceIds.length === 0) return 0
+  const client = getEsClient()
+  const filter: Record<string, unknown>[] = [
+    { term: { user_id: userId } },
+    { terms: { source_id: sourceIds } },
+  ]
+  if (options?.sourceType) {
+    filter.push({ term: { source_type: options.sourceType } })
+  }
+  const resp = await client.deleteByQuery({
+    index: RAG_INDEX,
+    refresh: true,
+    conflicts: 'proceed',
+    query: { bool: { filter } },
+  })
+  return (resp as { deleted?: number }).deleted ?? 0
+}
+
 function sha256(text: string): string {
   return createHash('sha256').update(text, 'utf8').digest('hex')
 }

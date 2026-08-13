@@ -113,6 +113,12 @@ export const useMessageStore = defineStore('message', () => {
         contentBuffer += event.content
         break
 
+      case 'warning':
+        if (msg.value) {
+          msg.value.warning = event.content
+        }
+        break
+
       case 'done':
         stopTypewriter(msg)
         break

@@ -24,7 +24,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
 
   it('没有规则时返回空字符串', async () => {
     await initMemoryDb()
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).toBe('')
   })
 
@@ -37,7 +37,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
       supporting_conversations: ['conv-1'],
     })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).toContain('## 长期记忆（基于历史会话总结的规则）')
     expect(result).toContain('- [用户偏好] 用户喜欢简洁的回复')
   })
@@ -63,7 +63,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
       supporting_conversations: [],
     })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).toContain('- [用户偏好] 偏好规则')
     expect(result).toContain('- [项目规则] 项目规则')
     expect(result).toContain('- [稳定事实] 稳定事实')
@@ -90,7 +90,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
       supporting_conversations: [],
     })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     const lines = result.split('\n').filter(l => l.startsWith('- ['))
     expect(lines.length).toBe(3)
     // Should be in creation order
@@ -108,7 +108,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
       supporting_conversations: ['conv-a', 'conv-b'],
     })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).toContain('地球是圆的，围绕太阳公转')
     expect(result).toMatch(/^## 长期记忆/)
     // Verify there's a newline at the end for clean concatenation
@@ -130,7 +130,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
       supporting_conversations: ['c2'],
     })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     const expected = '## 长期记忆（基于历史会话总结的规则）\n- [用户偏好] 用户偏好A\n- [项目规则] 项目规则B\n'
     expect(result).toBe(expected)
   })
@@ -141,7 +141,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
     await initMemoryDb()
     createCandidate({ conversation_id: 'conv-a', type: 'user_preference', statement: '用户喜欢深色主题', durable: 0 })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).toContain('## 近期偏好（待验证）')
     expect(result).toContain('用户喜欢深色主题')
   })
@@ -151,7 +151,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
     createCandidate({ conversation_id: 'conv-a', type: 'fact', statement: '一次性事实', durable: 0 })
     createCandidate({ conversation_id: 'conv-b', type: 'lesson', statement: '一次性教训', durable: 0 })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     // 无 rules 且无 user_preference candidates -> 空字符串
     expect(result).toBe('')
   })
@@ -166,7 +166,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
     })
     createCandidate({ conversation_id: 'conv-b', type: 'user_preference', statement: '待验证的偏好', durable: 0 })
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).toContain('## 长期记忆（基于历史会话总结的规则）')
     expect(result).toContain('## 近期偏好（待验证）')
     expect(result).toContain('已提升的偏好')
@@ -184,7 +184,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
       ['conv-prom#1', 'conv-prom', 'user_preference', '已提升的偏好不应出现', 0, 1, new Date().toISOString()]
     )
 
-    const result = buildMemoryContext()
+    const result = await buildMemoryContext()
     expect(result).not.toContain('已提升的偏好不应出现')
   })
 
@@ -194,7 +194,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
     await initMemoryDb()
     createRule({ kind: 'user_preference_rule', rule: '用户1的偏好', promotion_reason: 'explicit', supporting_conversations: [], user_id: 'user-1' })
     createRule({ kind: 'user_preference_rule', rule: '用户2的偏好', promotion_reason: 'explicit', supporting_conversations: [], user_id: 'user-2' })
-    const result = buildMemoryContext('user-1')
+    const result = await buildMemoryContext('user-1')
     expect(result).toContain('用户1的偏好')
     expect(result).not.toContain('用户2的偏好')
   })
@@ -203,7 +203,7 @@ describe('Memory Recall - buildMemoryContext()', () => {
     await initMemoryDb()
     createCandidate({ conversation_id: 'conv-a', type: 'user_preference', statement: '用户1的待验证偏好', durable: 0, user_id: 'user-1' })
     createCandidate({ conversation_id: 'conv-b', type: 'user_preference', statement: '用户2的待验证偏好', durable: 0, user_id: 'user-2' })
-    const result = buildMemoryContext('user-1')
+    const result = await buildMemoryContext('user-1')
     expect(result).toContain('用户1的待验证偏好')
     expect(result).not.toContain('用户2的待验证偏好')
   })

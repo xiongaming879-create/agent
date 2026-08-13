@@ -8,6 +8,12 @@ import {
   getMessages,
   countPinnedConversations,
 } from '../db'
+import {
+  getCandidateIdsByConversationId,
+  deleteEpisodesByConversationId,
+  deleteCandidatesByConversationId,
+} from '../db/memory-db'
+import { deleteEsBySourceIds } from '../services/rag-indexer'
 import { authMiddleware } from '../middleware/auth'
 
 const router = Router()
@@ -107,7 +113,7 @@ router.patch('/:id', (req, res) => {
   }
 })
 
-router.delete('/:id', (req, res) => {
+router.delete('/:id', async (req, res) => {
   try {
     const conv = getConversation(req.params.id)
     if (!conv) {
@@ -118,7 +124,24 @@ router.delete('/:id', (req, res) => {
       res.status(403).json({ error: '无权限访问' })
       return
     }
-    deleteConversation(req.params.id)
+
+    const convId = req.params.id
+    const userId = req.user!.userId
+
+    const messageIds = getMessages(convId).map(m => m.id)
+    const candidateIds = getCandidateIdsByConversationId(convId)
+
+    deleteConversation(convId)
+    deleteEpisodesByConversationId(convId)
+    deleteCandidatesByConversationId(convId)
+
+    try {
+      await deleteEsBySourceIds(userId, messageIds, { sourceType: 'message' })
+      await deleteEsBySourceIds(userId, candidateIds, { sourceType: 'candidate' })
+    } catch (err) {
+      console.warn('[Conversation] ES cleanup failed (non-fatal):', err instanceof Error ? err.message : String(err))
+    }
+
     res.status(204).end()
   } catch (err: unknown) {
     console.error('[DELETE conversation/:id]', err)

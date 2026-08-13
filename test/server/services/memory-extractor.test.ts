@@ -13,14 +13,13 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const TEST_DB = path.resolve(__dirname, '../../../server/data/memory-extractor-test.db')
 process.env.MEMORY_DB_PATH = TEST_DB
-process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
-process.env.ANTHROPIC_BASE_URL = 'https://api.test.com'
+process.env.SILICONFLOW_API_KEY = 'test-token'
 process.env.AGENT_MODEL = 'test-model'
 
 function mockLLMResponse(responseBody: unknown) {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify({
-      content: [{ text: JSON.stringify(responseBody) }],
+      choices: [{ message: { content: JSON.stringify(responseBody) } }],
     }), { status: 200 })
   )
 }
@@ -28,7 +27,7 @@ function mockLLMResponse(responseBody: unknown) {
 function mockLLMTextResponse(text: string) {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify({
-      content: [{ text }],
+      choices: [{ message: { content: text } }],
     }), { status: 200 })
   )
 }
@@ -40,7 +39,7 @@ function mockLLMFailure() {
 function mockLLMInvalidResponse() {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(
     new Response(JSON.stringify({
-      content: [{ text: '这不是有效的 JSON 格式' }],
+      choices: [{ message: { content: '这不是有效的 JSON 格式' } }],
     }), { status: 200 })
   )
 }
@@ -132,10 +131,10 @@ describe('Memory Extractor - extractSessionMemories', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, options) => {
       capturedBody = options?.body as string
       return new Response(JSON.stringify({
-        content: [{ text: JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
           episode_summary: '测试截断',
           memory_items: [],
-        }) }],
+        }) } }],
       }), { status: 200 })
     })
 
@@ -221,12 +220,12 @@ describe('Memory Extractor - extractSessionMemories', () => {
 
   // ===== 新增：标准化 callLLM 测试（方案1 / L5） =====
 
-  it('请求 body 的 system 是顶层字段，messages 不含 system role', async () => {
+  it('请求 body 的 system prompt 以 messages 首条 system 角色消息发送', async () => {
     let capturedBody = ''
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
       capturedBody = options?.body as string
       return new Response(JSON.stringify({
-        content: [{ text: JSON.stringify({ episode_summary: '测试', memory_items: [] }) }],
+        choices: [{ message: { content: JSON.stringify({ episode_summary: '测试', memory_items: [] }) } }],
       }), { status: 200 })
     })
     await extractSessionMemories('conv-sys', [
@@ -234,12 +233,10 @@ describe('Memory Extractor - extractSessionMemories', () => {
       { role: 'assistant', content: '回复' },
     ])
     const body = JSON.parse(capturedBody)
-    expect(body.system).toBeTruthy()
-    expect(typeof body.system).toBe('string')
     expect(Array.isArray(body.messages)).toBe(true)
-    for (const m of body.messages) {
-      expect(m.role).not.toBe('system')
-    }
+    expect(body.messages[0].role).toBe('system')
+    expect(typeof body.messages[0].content).toBe('string')
+    expect(body.messages[0].content).toBeTruthy()
   })
 
   // ===== 新增：prompt 含 durable 判定标准（方案3 / L2） =====
@@ -249,7 +246,7 @@ describe('Memory Extractor - extractSessionMemories', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (_url, options) => {
       capturedBody = options?.body as string
       return new Response(JSON.stringify({
-        content: [{ text: JSON.stringify({ episode_summary: '测试', memory_items: [] }) }],
+        choices: [{ message: { content: JSON.stringify({ episode_summary: '测试', memory_items: [] }) } }],
       }), { status: 200 })
     })
     await extractSessionMemories('conv-prompt', [
@@ -257,8 +254,9 @@ describe('Memory Extractor - extractSessionMemories', () => {
       { role: 'assistant', content: '回复' },
     ])
     const body = JSON.parse(capturedBody)
-    expect(body.system).toContain('个人习惯')
-    expect(body.system).toContain('长期偏好')
+    const systemContent = body.messages[0].content as string
+    expect(systemContent).toContain('个人习惯')
+    expect(systemContent).toContain('长期偏好')
   })
 
   // ===== 新增：解析容错 + 重试（修复1）=====
@@ -270,7 +268,7 @@ describe('Memory Extractor - extractSessionMemories', () => {
       const text = callCount === 1
         ? '抱歉，我无法分析这段对话。'
         : JSON.stringify({ episode_summary: '重试成功', memory_items: [{ type: 'user_preference', statement: '用户喜欢深色主题', durable: true }] })
-      return new Response(JSON.stringify({ content: [{ text }] }), { status: 200 })
+      return new Response(JSON.stringify({ choices: [{ message: { content: text } }] }), { status: 200 })
     })
 
     await extractSessionMemories('conv-retry', [

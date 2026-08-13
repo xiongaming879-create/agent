@@ -32,6 +32,7 @@ export type AgentEvent =
   | { type: 'observation'; content: string }
   | { type: 'content'; content: string }
   | { type: 'content_delta'; content: string }
+  | { type: 'warning'; content: string }
   | { type: 'done' }
 
 export interface User {

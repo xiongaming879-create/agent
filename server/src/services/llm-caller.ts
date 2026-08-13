@@ -1,45 +1,96 @@
 /**
- * 轻量 LLM 单次调用（流式），供 CHITCHAT/KNOWLEDGE 路径复用。
+ * 轻量 LLM 单次调用（硅基流动 OpenAI 兼容接口），供 CHITCHAT/KNOWLEDGE 路径复用。
  * 无 ReAct 循环、无工具调用，单次请求流式输出文本。
+ * API 错误时 fallback 到 MODEL_STRONG 重试一次。
  */
 import type { AgentEvent } from '../types'
-import { ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL } from './llm-config'
+import { LLM_API_KEY, LLM_BASE_URL, MODEL_STRONG } from './llm-config'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
 }
 
+const LLM_TIMEOUT_MS = 15000
+
+function fetchWithTimeout(url: string, options: RequestInit, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  return fetch(url, { ...options, signal: controller.signal })
+    .finally(() => clearTimeout(timer))
+}
+
+function buildHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${LLM_API_KEY}`,
+  }
+}
+
+function buildBody(model: string, messages: ChatMessage[], systemPrompt: string, maxTokens: number, stream: boolean): string {
+  const fullMessages = systemPrompt
+    ? [{ role: 'system' as const, content: systemPrompt }, ...messages]
+    : messages
+  return JSON.stringify({
+    model,
+    max_tokens: maxTokens,
+    temperature: 0,
+    stream,
+    messages: fullMessages,
+  })
+}
+
 /**
  * 流式调用 LLM，输出 content_delta 事件。
  * 用于不需要工具的轻量路径（CHITCHAT/KNOWLEDGE）。
+ * 首次用传入的 model，失败则 fallback 到 MODEL_STRONG 重试。
  */
 export async function* streamLLM(
   messages: ChatMessage[],
   systemPrompt: string,
   model: string
 ): AsyncGenerator<AgentEvent> {
-  const url = `${ANTHROPIC_BASE_URL}/v1/messages`
-  const body: Record<string, unknown> = {
-    model,
-    max_tokens: 4096,
-    temperature: 0,
-    stream: true,
-    messages,
-    system: systemPrompt,
-  }
+  const url = `${LLM_BASE_URL}/v1/chat/completions`
+  const headers = buildHeaders()
 
   let res: Response
   try {
-    res = await fetch(url, {
+    res = await fetchWithTimeout(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': ANTHROPIC_AUTH_TOKEN,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(body),
-    })
+      headers,
+      body: buildBody(model, messages, systemPrompt, 4096, true),
+    }, LLM_TIMEOUT_MS)
+  } catch (err) {
+    yield { type: 'thought', content: `${model} 不可用 (${err instanceof Error ? err.message : String(err)})，切换到 ${MODEL_STRONG} 重试` }
+    yield* retryWithStrongModel(messages, systemPrompt)
+    return
+  }
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => '')
+    yield { type: 'thought', content: `${model} API 错误 ${res.status}，切换到 ${MODEL_STRONG} 重试` }
+    yield* retryWithStrongModel(messages, systemPrompt)
+    return
+  }
+
+  yield* readSSEStream(res)
+
+  yield { type: 'done' }
+}
+
+async function* retryWithStrongModel(
+  messages: ChatMessage[],
+  systemPrompt: string
+): AsyncGenerator<AgentEvent> {
+  const url = `${LLM_BASE_URL}/v1/chat/completions`
+  const headers = buildHeaders()
+  let res: Response
+  try {
+    res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers,
+      body: buildBody(MODEL_STRONG, messages, systemPrompt, 4096, true),
+    }, LLM_TIMEOUT_MS)
   } catch (err) {
     yield { type: 'thought', content: `LLM 调用失败: ${err instanceof Error ? err.message : String(err)}` }
     yield { type: 'done' }
@@ -53,10 +104,15 @@ export async function* streamLLM(
     return
   }
 
+  yield* readSSEStream(res)
+
+  yield { type: 'done' }
+}
+
+async function* readSSEStream(res: Response): AsyncGenerator<AgentEvent> {
   const reader = res.body?.getReader()
   if (!reader) {
     yield { type: 'thought', content: 'LLM 返回无响应体' }
-    yield { type: 'done' }
     return
   }
 
@@ -76,11 +132,9 @@ export async function* streamLLM(
         if (!data || data === '[DONE]') continue
         try {
           const event = JSON.parse(data)
-          if (event.type === 'content_block_delta') {
-            const delta = event.delta
-            if (delta?.type === 'text_delta' && delta.text) {
-              yield { type: 'content_delta', content: delta.text }
-            }
+          const delta = event.choices?.[0]?.delta
+          if (delta?.content) {
+            yield { type: 'content_delta', content: delta.content }
           }
         } catch { /* skip malformed chunks */ }
       }
@@ -88,12 +142,11 @@ export async function* streamLLM(
   } finally {
     reader.releaseLock()
   }
-
-  yield { type: 'done' }
 }
 
 /**
  * 非流式 LLM 调用，返回完整文本。用于 LLM 分类器等需要完整结果的场景。
+ * 15 秒超时，失败时 fallback 到 MODEL_STRONG 重试一次。
  */
 export async function callLLM(
   messages: ChatMessage[],
@@ -101,29 +154,30 @@ export async function callLLM(
   model: string,
   maxTokens: number = 100
 ): Promise<string> {
-  const url = `${ANTHROPIC_BASE_URL}/v1/messages`
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_AUTH_TOKEN,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model,
-      max_tokens: maxTokens,
-      temperature: 0,
-      messages,
-      system: systemPrompt,
-    }),
-  })
+  const url = `${LLM_BASE_URL}/v1/chat/completions`
+  const headers = buildHeaders()
 
-  if (!res.ok) {
-    throw new Error(`LLM API error ${res.status}`)
+  try {
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers,
+      body: buildBody(model, messages, systemPrompt, maxTokens, false),
+    }, LLM_TIMEOUT_MS)
+    if (!res.ok) throw new Error(`LLM API error ${res.status}`)
+    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> }
+    return data.choices?.[0]?.message?.content || ''
+  } catch (err) {
+    if (model === MODEL_STRONG) throw err
+    console.warn(`[callLLM] ${model} failed (${err instanceof Error ? err.message : String(err)}), retrying with ${MODEL_STRONG}`)
+    const res = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers,
+      body: buildBody(MODEL_STRONG, messages, systemPrompt, maxTokens, false),
+    }, LLM_TIMEOUT_MS)
+    if (!res.ok) throw new Error(`LLM API error ${res.status}`)
+    const data = (await res.json()) as { choices: Array<{ message: { content: string } }> }
+    return data.choices?.[0]?.message?.content || ''
   }
-
-  const data = (await res.json()) as { content: Array<{ type: string; text: string }> }
-  return data.content?.map(c => c.text).join('') || ''
 }
 
 /**

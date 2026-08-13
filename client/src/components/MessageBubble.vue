@@ -126,6 +126,10 @@ function copyCodeBlock(event: MouseEvent) {
       </div>
       <div v-else class="markdown-body text-[13px] leading-normal break-words overflow-hidden" v-html="renderedContent" />
 
+      <div v-if="message.warning" class="mt-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded text-yellow-400 text-[12px] leading-relaxed">
+        ⚠️ {{ message.warning }}
+      </div>
+
       <div v-if="!isTyping" class="flex items-center gap-3 mt-2">
         <BranchNavigator
           :siblings="siblings"

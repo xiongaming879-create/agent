@@ -149,7 +149,7 @@ describe('classifyByLLM', () => {
   function mockFetchResponse(text: string) {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ content: [{ type: 'text', text }] }),
+      json: async () => ({ choices: [{ message: { content: text } }] }),
     }) as unknown as typeof fetch
   }
 
@@ -192,7 +192,7 @@ describe('classifyQuery', () => {
       fetchCalls++
       return {
         ok: true,
-        json: async () => ({ content: [{ type: 'text', text: 'COMPLEX' }] }),
+        json: async () => ({ choices: [{ message: { content: 'COMPLEX' } }] }),
       }
     }) as unknown as typeof fetch
   })
@@ -235,7 +235,7 @@ describe('runRoutedAgent complexity 覆盖', () => {
   // 辅助：mock fetch 返回 SSE 流，content_delta 事件输出给定文本
   function mockSSEStream(text: string) {
     const sseEvents = [
-      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text } })}`,
+      `data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}`,
       'data: [DONE]',
     ].join('\n')
     const encoder = new TextEncoder()

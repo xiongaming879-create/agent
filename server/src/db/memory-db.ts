@@ -164,6 +164,17 @@ export function getUnpromotedCandidates(userId?: string): Candidate[] {
   return result[0].values.map(rowToCandidate)
 }
 
+export function getCandidatesByIds(ids: string[], userId?: string): Candidate[] {
+  if (ids.length === 0) return []
+  const db = getMemoryDb()
+  const placeholders = ids.map(() => '?').join(',')
+  const result = userId
+    ? db.exec(`SELECT ${CANDIDATE_COLS} FROM memory_candidates WHERE id IN (${placeholders}) AND user_id = ?`, [...ids, userId])
+    : db.exec(`SELECT ${CANDIDATE_COLS} FROM memory_candidates WHERE id IN (${placeholders})`, ids)
+  if (!result[0]) return []
+  return result[0].values.map(rowToCandidate)
+}
+
 export function markCandidatePromoted(id: string): void {
   const db = getMemoryDb()
   db.run(`UPDATE memory_candidates SET promoted = 1 WHERE id = ?`, [id])
@@ -230,6 +241,51 @@ export function getAllRules(userId?: string): Rule[] {
     : db.exec(`SELECT ${RULE_COLS} FROM memory_rules ORDER BY created_at ASC`)
   if (!result[0]) return []
   return result[0].values.map(rowToRule)
+}
+
+export function getRulesByIds(ids: string[], userId?: string): Rule[] {
+  if (ids.length === 0) return []
+  const db = getMemoryDb()
+  const placeholders = ids.map(() => '?').join(',')
+  const result = userId
+    ? db.exec(`SELECT ${RULE_COLS} FROM memory_rules WHERE id IN (${placeholders}) AND user_id = ?`, [...ids, userId])
+    : db.exec(`SELECT ${RULE_COLS} FROM memory_rules WHERE id IN (${placeholders})`, ids)
+  if (!result[0]) return []
+  return result[0].values.map(rowToRule)
+}
+
+// --- 删除对话时级联清理 ---
+
+export function getCandidateIdsByConversationId(conversationId: string): string[] {
+  const db = getMemoryDb()
+  const result = db.exec(
+    `SELECT id FROM memory_candidates WHERE conversation_id = ?`,
+    [conversationId]
+  )
+  if (!result[0]) return []
+  return result[0].values.map(row => row[0] as string)
+}
+
+export function deleteEpisodesByConversationId(conversationId: string): number {
+  const db = getMemoryDb()
+  const result = db.exec(
+    `SELECT COUNT(*) FROM memory_episodes WHERE conversation_id = ?`,
+    [conversationId]
+  )
+  db.run(`DELETE FROM memory_episodes WHERE conversation_id = ?`, [conversationId])
+  markMemoryDirty()
+  return (result[0]?.values[0]?.[0] as number) ?? 0
+}
+
+export function deleteCandidatesByConversationId(conversationId: string): number {
+  const db = getMemoryDb()
+  const result = db.exec(
+    `SELECT COUNT(*) FROM memory_candidates WHERE conversation_id = ?`,
+    [conversationId]
+  )
+  db.run(`DELETE FROM memory_candidates WHERE conversation_id = ?`, [conversationId])
+  markMemoryDirty()
+  return (result[0]?.values[0]?.[0] as number) ?? 0
 }
 
 // --- 用户隔离：回填老数据的 user_id ---

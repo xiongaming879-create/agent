@@ -7,7 +7,7 @@
 - **查询分类路由** - 规则 + LLM 兜底，将查询分流到 5 条路径（CHITCHAT/KNOWLEDGE/CALCULATION/SEARCH/COMPLEX），按路径选模型、过滤工具
 - **多模型调度** - 轻量模型（`deepseek-v4-flash`）处理简单路径，强模型（`glm-5.2`）处理复杂路径
 - **复杂度覆盖** - 前端 `fast/medium/deep` 三档覆盖分类结果，`fast` 强制轻量、`deep` 强制 COMPLEX
-- **长期记忆系统** - 会话级 Episode 提取 → Candidate 候选 → 规则提升（跨会话/失败教训/显式标记）→ Rule 注入下次对话 system prompt
+- **长期记忆系统** - 两层架构：已提升 Rules 全量注入 system prompt（全局上下文，不走向量检索）+ 未提升 Candidates 向量检索 top-3（按 query 相关性，ES BM25+kNN+rerank）；会话级 Episode 提取 → Candidate 候选 → 规则提升（跨会话/失败教训/显式标记）
 - **内置知识库** - 节假日日期、动态当前日期、常识性信息，避免无意义联网搜索
 - **ReAct 智能对话** - LangGraph `createReactAgent` 驱动的思考→行动→观察循环，支持多轮工具调用
 - **多对话管理** - 创建/切换/删除/置顶（每人最多 5 个）、System Prompt 自定义
@@ -20,7 +20,7 @@
 - **个人设置** - 头像上传、主题（light/dark/auto）、字号、修改密码
 - **管理后台** - admin 角色可查看所有用户与其对话历史
 - **对话导出** - 支持 JSON / Markdown 格式导出
-- **事实核查** - Agent 回答完成后后置校验是否编造（仅记日志，不阻断）
+- **事实核查** - Agent 回答完成后后置校验是否编造，校验失败时前端显示黄色警告条（不覆盖回答内容）
 - **RAG 知识库检索** - Elasticsearch 8.x + 硅基流动 bge-m3 向量 + bge-reranker-v2-m3 重排，封装为 `knowledge_search` 工具，Agent 按需检索本地知识库（历史对话/记忆/已上传文档），BM25+kNN 加权融合 → rerank → 返回带来源标注的 top3-5
 - **文档上传与管理** - 支持 MD/TXT/PDF 文档上传，自动分类型切块+向量化+入库，前端文档管理 UI（上传/列表/删除）
 - **暗色主题** - Ethereal Glass 全局暗色设计风格
@@ -82,12 +82,10 @@
 │                       服务层 (services/)                          │
 │                                                                   │
 │  message.ts ──> agent.runAgent()                                  │
-│                   ├─ USE_LANGCHAIN?                               │
-│                   │   ├─ true  → query-router.runRoutedAgent()    │
-│                   │   │            ├─ classifyQuery (规则+LLM)    │
-│                   │   │            ├─ filterTools (白名单)        │
-│                   │   │            └─ 5 路径分发 (见下文)          │
-│                   │   └─ false → runAgentLegacy (ReAct prompt)    │
+│                   ├─ query-router.runRoutedAgent()                │
+│                   │   ├─ classifyQuery (规则+LLM)                │
+│                   │   ├─ filterTools (白名单)                    │
+│                   │   └─ 5 路径分发 (见下文)                      │
 │                   ├─ langchain-adapter.langchainAgentRunner()     │
 │                   │     (LangGraph stream → AgentEvent)           │
 │                   ├─ llm-caller.streamLLM / callLLM               │
@@ -95,7 +93,7 @@
 │                   ├─ memory-recall.buildMemoryContext             │
 │                   ├─ memory-extractor (SSE 后异步提取)            │
 │                   ├─ memory-promoter (候选 → 规则提升)            │
-│                   └─ validateAnswer (后置事实核查, log-only)       │
+│                   └─ validateAnswer (后置事实核查, 失败时 yield warning) │
 └──────────────────────────────┬──────────────────────────────────┘
                                │
 ┌──────────────────────────────┴──────────────────────────────────┐
@@ -152,8 +150,6 @@ DB_PATH=server/data/agent.db
 MEMORY_DB_PATH=server/data/memory.db
 MCP_CONFIG_PATH=.mcp.json
 
-# Agent 实现
-USE_LANGCHAIN=true
 
 # RAG（不配则 RAG 降级，其他功能正常）
 EMBEDDING_AND_RERANK_API_KEY=your-siliconflow-api-key
@@ -273,7 +269,7 @@ agent/
 │       │   ├── tool-adapter.ts       # 内置 Tool → DynamicStructuredTool 包装
 │       │   ├── memory-extractor.ts   # 会话 → episode + candidates
 │       │   ├── memory-promoter.ts    # candidates → rules（含 LLM 合并）
-│       │   ├── memory-recall.ts      # rules → system prompt 注入
+│       │   ├── memory-recall.ts      # rules 全量注入 + candidates 向量检索
 │       │   ├── es-client.ts          # ES 连接 + index 初始化 + 磁盘水位监控
 │       │   ├── embedding-client.ts   # 硅基流动 embed/rerank（分批+并发+429退避）
 │       │   ├── rag-chunker.ts        # 分类型语义切块（段落/代码/合同 + overlap）
@@ -306,7 +302,7 @@ agent/
 
 ### 1. 查询分类路由流程
 
-`runAgent()` 入口在 `USE_LANGCHAIN=true`（默认）时调用 `runRoutedAgent()`，根据查询意图分流到 5 条路径，每条路径选择不同模型与工具子集。
+`runAgent()` 入口调用 `runRoutedAgent()`，根据查询意图分流到 5 条路径，每条路径选择不同模型与工具子集。
 
 ```mermaid
 flowchart TD
@@ -481,7 +477,7 @@ flowchart TD
     O --> P[memory_rules 表]
     N -.-> RR[保留在 memory_candidates<br/>promoted=0]
 
-    Q[下次对话 runRoutedAgent] --> R[buildMemoryContext<br/>读 rules + unpromoted<br/>user_preference candidates]
+    Q[下次对话 runRoutedAgent] --> R[buildMemoryContext<br/>rules: SQLite 全量查<br/>candidates: ES 向量检索 top-3]
     R --> S[注入 system prompt<br/>## 长期记忆 + ## 近期偏好]
     S --> T[Agent 回答时参考规则与偏好]
     RR -.-> R
@@ -501,7 +497,7 @@ flowchart TD
 - **标准化调用**：extractor/promoter 统一用 `llm-caller.callLLM`，`system` 作为顶层字段（修复 system-in-messages 隐患，详见设计文档 `docs/superpowers/specs/2026-07-06-memory-session-management-design.md`）
 - **durable 判定**：个人习惯/长期偏好/身份信息 -> `durable=true`（即使会话主题不是偏好本身），避免"睡午觉习惯"被判为非持久
 - **单会话偏好提升**：`type=user_preference` 单会话即提升为 `user_preference_rule`（`promotion_reason=explicit`），无需跨会话重复；`fact` 单会话不提升
-- **recall 读 candidates**：`buildMemoryContext` 同时读 rules + unpromoted `user_preference` candidates（最近 10 条），未提升的偏好也注入 system prompt 的"## 近期偏好（待验证）"节
+9. **记忆提升优先级 + recall 双层架构** - cross_session（≥2 会话）→ failure_evidence（lesson）→ explicit（durable=1 或 user_preference 单会话）；`fact` 单会话不提升；`buildMemoryContext` rules 全量注入（SQLite `getAllRules`，全局上下文不走向量检索），candidates 向量检索 top-3（ES `hybridSearch`，只注入 `user_preference` 类型，ES 不可用时 fallback 全量截断 10 条）
 
 ### 5. MCP 工具加载流程
 
@@ -725,7 +721,6 @@ flowchart LR
 | MEMORY_DB_PATH | server/data/memory.db | ❌ | 记忆库路径 |
 | MCP_CONFIG_PATH | .mcp.json | ❌ | MCP 配置文件路径 |
 | WORKSPACE_ROOT | server/src/workspace | ❌ | 虚拟文件系统根目录 |
-| USE_LANGCHAIN | true | ❌ | `false` 回退 Legacy ReAct 实现 |
 | EMBEDDING_AND_RERANK_API_KEY | - | ❌* | 硅基流动 API key（RAG 必需，不配则降级） |
 | EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | 硅基流动 base_url |
 | EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
@@ -765,9 +760,9 @@ MCP 工具在服务启动时动态发现并注册，与内置工具并存。`cal
 4. **KNOWLEDGE 回退** - 内置知识不足时输出 `__FALLBACK_TO_SEARCH__` 信号，路由层检测后切换到 SEARCH 路径
 5. **LangGraph recursionLimit** - 50 super-steps ≈ 25 次实际工具调用（每轮 = 推理 + 工具 = 2 步）
 6. **搜索死循环防护** - 同一 `tool:input` 重复 ≥ 2 次立即终止；搜索类工具总调用 > 25 次终止
-7. **事实核查 log-only** - `validateAnswer` 检查回答是否编造，但因 Agent 会用内置知识（不在 observations 中），校验失败只记日志不覆盖回答
+7. **事实核查 warning 事件** - `validateAnswer` 检查回答是否编造，校验失败时 yield `warning` 事件，前端在气泡底部显示黄色警告条（不覆盖回答内容，因 Agent 会用内置知识，校验器无法区分"内置知识"和"编造"）
 8. **记忆异步提取 + 标准化调用** - SSE 流结束后 `extractSessionMemories` 与 `promoteCandidates` 均 fire-and-forget；extractor/promoter 统一用 `llm-caller.callLLM`（顶层 `system` 字段，修复 system-in-messages 隐患），`parseResponse` 剥离 markdown + 栈匹配 JSON + 中文冒号 fallback 容错
-9. **记忆提升优先级 + recall 双源** - cross_session（≥2 会话）-> failure_evidence（lesson）-> explicit（durable=1 或 user_preference 单会话）；`fact` 单会话不提升；`buildMemoryContext` 读 rules + unpromoted `user_preference` candidates（最近 10 条），未提升偏好注入"## 近期偏好（待验证）"节
+9. **记忆提升优先级 + recall 双层架构** - cross_session（≥2 会话）→ failure_evidence（lesson）→ explicit（durable=1 或 user_preference 单会话）； 单会话不提升； rules 全量注入（SQLite ，全局上下文不走向量检索），candidates 向量检索 top-3（ES ，只注入  类型，ES 不可用时 fallback 全量截断 10 条）
 10. **MCP input 重映射** - 代理 API 可能不支持 `tools` 参数，模型以 `{"input":"..."}` 调用；Zod schema 额外接受 `input` 别名，运行时重映射到 `url`/`query`/`path`
 11. **sql.js 异步** - 所有 db 操作必须 await；主库 5s 自动存盘，记忆库每次写立即存盘
 12. **ESM `__dirname`** - 用 `fileURLToPath(import.meta.url)` 替代

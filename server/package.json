@@ -10,6 +10,7 @@
     "@elastic/elasticsearch": "^8.19.2",
     "@langchain/anthropic": "^1.4.1",
     "@langchain/core": "^1.1.49",
+    "@langchain/openai": "^1.5.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "bcryptjs": "^3.0.3",
     "cheerio": "^1.0.0",

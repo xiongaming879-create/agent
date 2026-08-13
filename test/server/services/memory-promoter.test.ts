@@ -15,8 +15,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const TEST_DB = path.resolve(__dirname, '../../../server/data/memory-promoter-test.db')
 process.env.MEMORY_DB_PATH = TEST_DB
-process.env.ANTHROPIC_AUTH_TOKEN = 'test-token'
-process.env.ANTHROPIC_BASE_URL = 'https://api.test.com'
+process.env.SILICONFLOW_API_KEY = 'test-token'
 process.env.AGENT_MODEL = 'test-model'
 
 describe('Memory Promoter - promoteCandidates', () => {

@@ -1,4 +1,5 @@
-import { getAllRules, getUnpromotedCandidates } from '../db/memory-db'
+import { getAllRules, getUnpromotedCandidates, getCandidatesByIds, type Candidate } from '../db/memory-db'
+import { hybridSearch } from './rag-search'
 
 const LABEL_MAP: Record<string, string> = {
   user_preference_rule: '用户偏好',
@@ -6,21 +7,20 @@ const LABEL_MAP: Record<string, string> = {
   stable_fact: '稳定事实',
 }
 
-/** 近期偏好（未提升的 user_preference candidate）注入上限，避免 prompt 膨胀 */
+/** 全量注入时 candidate 的上限，避免 prompt 膨胀 */
 const MAX_RECENT_CANDIDATES = 10
+/** 向量检索时 top-N 候选记忆条数 */
+const MAX_MEMORY_HITS = 3
 
 /**
  * 构建 system prompt 追加内容：长期记忆（已提升的 rules）+ 近期偏好（未提升的 candidates）。
- * - rules: 跨会话/失败教训/显式标记/单会话偏好已提升的规则
- * - candidates: 仅 type=user_preference 的未提升候选（fact/lesson 不注入，避免噪音）
+ * - rules 全量注入：已提升的长期记忆是全局上下文，与任何 query 都可能相关（如"用户住在深圳"对天气查询有用）
+ * - candidates 有 query + userId 时走向量检索 top-3；ES 不可用或无 query 时 fallback 全量
  * userId 用于用户隔离：只注入该用户的记忆。不传时返回全部（向后兼容旧测试）。
- * 当两者都为空时返回空字符串。
  */
-export function buildMemoryContext(userId?: string): string {
+export async function buildMemoryContext(userId?: string, query?: string): Promise<string> {
   const rules = getAllRules(userId)
-  const candidates = getUnpromotedCandidates(userId)
-    .filter(c => c.type === 'user_preference')
-    .slice(0, MAX_RECENT_CANDIDATES)
+  const candidates = await getRelevantCandidates(userId, query)
 
   if (rules.length === 0 && candidates.length === 0) return ''
 
@@ -40,4 +40,37 @@ export function buildMemoryContext(userId?: string): string {
   }
 
   return parts.join('\n\n') + '\n'
+}
+
+/**
+ * 获取与当前 query 相关的未提升 candidates。
+ * 有 query + userId 时走向量检索 top-3；否则全量（截断 MAX_RECENT_CANDIDATES）。
+ * ES/embedding 不可用时 fallback 全量。
+ */
+async function getRelevantCandidates(userId: string | undefined, query?: string): Promise<Candidate[]> {
+  const allCandidates = getUnpromotedCandidates(userId).filter(c => c.type === 'user_preference')
+
+  if (!query || !query.trim() || !userId) {
+    return allCandidates.slice(0, MAX_RECENT_CANDIDATES)
+  }
+
+  try {
+    const hits = await hybridSearch(query, userId, { sourceType: 'candidate', topN: MAX_MEMORY_HITS })
+    if (hits.length === 0) return []
+
+    const candidateIds = hits.map(h => h.sourceId)
+    const vectorCands = getCandidatesByIds(candidateIds, userId).filter(c => c.type === 'user_preference')
+    if (vectorCands.length === 0) return []
+
+    const candMap = new Map(vectorCands.map(c => [c.id, c]))
+    const ordered = hits
+      .map(h => candMap.get(h.sourceId))
+      .filter((c): c is NonNullable<typeof c> => !!c)
+
+    console.log(`[Memory] Candidates: ${ordered.length} vector hits for "${query.slice(0, 50)}"`)
+    return ordered
+  } catch (err) {
+    console.warn(`[Memory] Candidate vector recall failed, fallback to full:`, err instanceof Error ? err.message : String(err))
+    return allCandidates.slice(0, MAX_RECENT_CANDIDATES)
+  }
 }

@@ -6,10 +6,10 @@
  */
 import type { AgentEvent } from '../types'
 import type { DynamicStructuredTool } from '@langchain/core/tools'
-import { ChatAnthropic } from '@langchain/anthropic'
+import { ChatOpenAI } from '@langchain/openai'
 import { createReactAgent } from '@langchain/langgraph/prebuilt'
 import { z } from 'zod'
-import { ANTHROPIC_AUTH_TOKEN, ANTHROPIC_BASE_URL, MODEL_LIGHT, MODEL_STRONG } from './llm-config'
+import { LLM_API_KEY, LLM_BASE_URL, MODEL_LIGHT, MODEL_STRONG } from './llm-config'
 import type { QueryCategory, Complexity } from './llm-config'
 import { callLLM, streamLLM } from './llm-caller'
 import { buildDateContext, buildKnowledgeContext } from './knowledge'
@@ -192,10 +192,10 @@ const MAX_ITERATIONS_FULL = 50
 const MAX_ITERATIONS_LIGHT = 10
 
 function createAgent(model: string, tools: DynamicStructuredTool<Record<string, unknown>>[], systemContent: string) {
-  const llm = new ChatAnthropic({
-    modelName: model,
-    anthropicApiUrl: ANTHROPIC_BASE_URL,
-    anthropicApiKey: ANTHROPIC_AUTH_TOKEN,
+  const llm = new ChatOpenAI({
+    model: model,
+    apiKey: LLM_API_KEY,
+    configuration: { baseURL: `${LLM_BASE_URL}/v1` },
     temperature: 0,
     streaming: true,
     maxTokens: 4096,
@@ -208,6 +208,12 @@ function buildToolListFromLcTools(tools: DynamicStructuredTool<Record<string, un
   return tools.map(t => `- ${t.name} - ${t.description}`).join('\n')
 }
 
+/** 从消息列表提取最后一条 user 消息内容 */
+function getLastUserQuery(messages: ChatMessage[]): string {
+  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user')
+  return lastUserMsg?.content || ''
+}
+
 /** 获取全部 LangChain 工具（内置 + MCP） */
 function getAllLcTools(): DynamicStructuredTool<Record<string, unknown>>[] {
   return wrapAllTools(allTools, lcTools)
@@ -218,6 +224,8 @@ function getAllLcTools(): DynamicStructuredTool<Record<string, unknown>>[] {
 // ============================================================================
 
 async function* runChitchat(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
+  const query = getLastUserQuery(messages)
+  const memoryContext = await buildMemoryContext(options.userId, query)
   const prompt = `${buildDateContext()}
 
 你是一个智能 AI 助手。用与用户相同的语言回复。
@@ -225,7 +233,7 @@ async function* runChitchat(messages: ChatMessage[], options: AgentOptions): Asy
 - 不需要使用任何工具
 - 适当使用 markdown 格式
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext(options.userId)}`
+${memoryContext}`
 
   yield* streamLLM(messages, prompt, MODEL_LIGHT)
 }
@@ -237,6 +245,8 @@ ${buildMemoryContext(options.userId)}`
 const FALLBACK_SIGNAL = '__FALLBACK_TO_SEARCH__'
 
 async function* runKnowledge(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
+  const query = getLastUserQuery(messages)
+  const memoryContext = await buildMemoryContext(options.userId, query)
   const prompt = `${buildDateContext()}
 
 ${buildKnowledgeContext()}
@@ -250,7 +260,7 @@ ${buildKnowledgeContext()}
 - 回答简洁清晰，适当使用 markdown
 - 事实性内容标注来源：【来源：内置知识库】
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext(options.userId)}`
+${memoryContext}`
 
   // 缓冲完整输出，检测 fallback 信号
   let fullOutput = ''
@@ -304,8 +314,7 @@ ${PARALLEL_TOOL_RULES}
 
 Available tools:
 ${toolList}
-${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext(options.userId)}`
+${options.systemPrompt ? `\n${options.systemPrompt}` : ''}`
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
   yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_LIGHT })
@@ -316,6 +325,8 @@ ${buildMemoryContext(options.userId)}`
 // ============================================================================
 
 async function* runSearch(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
+  const query = getLastUserQuery(messages)
+  const memoryContext = await buildMemoryContext(options.userId, query)
   const allLcTools = getAllLcTools()
   const filteredTools = filterTools(allLcTools, ['search', 'fetch', 'browser_*', 'knowledge_search'])
   const toolList = buildToolListFromLcTools(filteredTools)
@@ -354,7 +365,7 @@ ${RAG_PROMPT_CONSTRAINTS}
 Available tools:
 ${toolList}
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext(options.userId)}`
+${memoryContext}`
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
   yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId })
@@ -365,6 +376,8 @@ ${buildMemoryContext(options.userId)}`
 // ============================================================================
 
 async function* runComplex(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
+  const query = getLastUserQuery(messages)
+  const memoryContext = await buildMemoryContext(options.userId, query)
   const allLcTools = getAllLcTools()
   const toolList = buildToolListFromLcTools(allLcTools)
 
@@ -403,7 +416,7 @@ ${RAG_PROMPT_CONSTRAINTS}
 Available tools:
 ${toolList}
 ${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${buildMemoryContext(options.userId)}`
+${memoryContext}`
 
   const agent = createAgent(MODEL_STRONG, allLcTools, prompt)
   yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId })

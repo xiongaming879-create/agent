@@ -53,8 +53,17 @@ export const useDocumentStore = defineStore('document', () => {
   }
 
   async function remove(docId: string) {
-    await authFetch(`${API}/${docId}`, { method: 'DELETE' })
-    documents.value = documents.value.filter(d => d.docId !== docId)
+    error.value = ''
+    try {
+      const res = await authFetch(`${API}/${encodeURIComponent(docId)}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({ error: '删除失败' }))
+        throw new Error(data.error || '删除失败')
+      }
+      documents.value = documents.value.filter(d => d.docId !== docId)
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '删除失败'
+    }
   }
 
   return { documents, uploading, error, success, lastUploadedName, fetchAll, upload, remove }
