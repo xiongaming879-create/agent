@@ -18,8 +18,8 @@ const showPromptDialog = ref(false)
 const systemPrompt = ref('')
 const currentComplexity = ref<Complexity>('medium')
 
-// Branch tracking: parent_id -> selected child index
-const branchSelections = ref<Record<string, number>>({})
+// 流式消息按 conversationId 隔离,只渲染当前对话的
+const streamingMessage = computed(() => msgStore.getStreamingMessage(convStore.activeId))
 
 // Hide input when admin is viewing another user's conversation
 const showInput = computed(() => {
@@ -32,16 +32,13 @@ const displayMessages = computed(() => {
 })
 
 // Load messages when conversation changes
-watch(() => convStore.activeId, async (id) => {
+watch(() => convStore.activeId, async (id, oldId) => {
+  // 中止旧对话的流式请求(分支选择保留在 store,按 conversationId 隔离)
+  if (oldId) {
+    msgStore.abortStreaming(oldId)
+  }
   if (id) {
-    // Clear streaming state from previous conversation
-    if (msgStore.isStreaming) {
-      msgStore.streamingConvId = null
-      msgStore.streamingMessage = null
-      msgStore.isStreaming = false
-    }
     await msgStore.fetchMessages(id)
-    branchSelections.value = {}
     const conv = convStore.conversations.find(c => c.id === id)
     systemPrompt.value = conv?.system_prompt || ''
     await scrollToBottom()
@@ -53,7 +50,7 @@ watch(() => msgStore.messages.length, async () => {
   await scrollToBottom()
 })
 
-watch(() => msgStore.streamingMessage?.content, async () => {
+watch(() => streamingMessage.value?.content, async () => {
   await scrollToBottom()
 })
 
@@ -89,8 +86,9 @@ function handleComplexityChange(complexity: Complexity) {
 }
 
 function handleSwitchBranch(messageId: string, parentId: string | null, index: number) {
-  const key = parentId || '__root__'
-  branchSelections.value[key] = index
+  if (convStore.activeId) {
+    msgStore.setBranchSelection(convStore.activeId, parentId, index)
+  }
 }
 
 async function saveSystemPrompt() {
@@ -103,8 +101,8 @@ async function saveSystemPrompt() {
 
 function getSiblingInfo(message: { id: string; parent_id: string | null }) {
   const siblings = msgStore.getSiblings(message.parent_id)
-  const key = message.parent_id || '__root__'
-  const selectedIdx = branchSelections.value[key] ?? siblings.findIndex(s => s.id === message.id)
+  const selectedIdx = msgStore.getBranchSelection(convStore.activeId, message.parent_id)
+    ?? siblings.findIndex(s => s.id === message.id)
   return { siblings, index: selectedIdx }
 }
 </script>
@@ -140,10 +138,10 @@ function getSiblingInfo(message: { id: string; parent_id: string | null }) {
           @regenerate="handleRegenerate(msg.id)"
         />
       </template>
-      <div v-if="msgStore.isStreaming && msgStore.streamingMessage" class="mr-auto">
+      <div v-if="streamingMessage" class="mr-auto">
         <MessageBubble
-          :message="msgStore.streamingMessage"
-          :siblings="[msgStore.streamingMessage]"
+          :message="streamingMessage"
+          :siblings="[streamingMessage]"
           :sibling-index="0"
           :is-last="true"
           :is-streaming="true"
@@ -153,7 +151,7 @@ function getSiblingInfo(message: { id: string; parent_id: string | null }) {
 
     <div v-if="showInput" class="border-t border-white/10 p-6">
       <ChatInput
-        :disabled="msgStore.isStreaming"
+        :disabled="msgStore.isConversationStreaming(convStore.activeId)"
         @send="handleSend"
         @update:complexity="handleComplexityChange"
       />
