@@ -126,6 +126,7 @@ router.post('/:conversationId/messages', async (req, res) => {
     systemPrompt: conv?.system_prompt || undefined,
     complexity: complexity || 'medium',
     userId: req.user!.userId,
+    conversationId: req.params.conversationId,
   }
 
   await processAgentStream(res, contextMessages, agentOptions, (fullContent, thoughtSteps) => {
@@ -209,6 +210,7 @@ router.post('/:conversationId/messages/:messageId/regenerate', async (req, res) 
     systemPrompt: conv?.system_prompt || undefined,
     complexity: complexity || 'medium',
     userId: req.user!.userId,
+    conversationId: req.params.conversationId,
   }
 
   await processAgentStream(res, contextMessages, agentOptions, (fullContent, thoughtSteps) => {

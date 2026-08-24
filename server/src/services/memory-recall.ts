@@ -12,6 +12,19 @@ const MAX_RECENT_CANDIDATES = 10
 /** 向量检索时 top-N 候选记忆条数 */
 const MAX_MEMORY_HITS = 3
 
+/** 记忆召回超时兜底：向量检索不该阻塞主回答，超时回退全量候选 */
+export const MEMORY_RECALL_TIMEOUT_MS = 2000
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`memory recall timed out after ${ms}ms`)), ms)
+    promise.then(
+      v => { clearTimeout(timer); resolve(v) },
+      e => { clearTimeout(timer); reject(e) },
+    )
+  })
+}
+
 /**
  * 构建 system prompt 追加内容：长期记忆（已提升的 rules）+ 近期偏好（未提升的 candidates）。
  * - rules 全量注入：已提升的长期记忆是全局上下文，与任何 query 都可能相关（如"用户住在深圳"对天气查询有用）
@@ -55,7 +68,10 @@ async function getRelevantCandidates(userId: string | undefined, query?: string)
   }
 
   try {
-    const hits = await hybridSearch(query, userId, { sourceType: 'candidate', topN: MAX_MEMORY_HITS })
+    const hits = await withTimeout(
+      hybridSearch(query, userId, { sourceType: 'candidate', topN: MAX_MEMORY_HITS }),
+      MEMORY_RECALL_TIMEOUT_MS,
+    )
     if (hits.length === 0) return []
 
     const candidateIds = hits.map(h => h.sourceId)

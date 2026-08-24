@@ -1,6 +1,7 @@
 import type { AgentEvent, Tool } from '../types'
 import { LLM_API_KEY, LLM_BASE_URL, MODEL } from './llm-config'
 import { runRoutedAgent } from './query-router'
+import { logFactCheck } from './logger'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
@@ -11,6 +12,7 @@ export interface AgentOptions {
   systemPrompt?: string
   complexity?: 'fast' | 'medium' | 'deep'
   userId?: string
+  conversationId?: string
 }
 
 // --- Fact-check validation ---
@@ -19,6 +21,9 @@ interface ValidationResult {
   valid: boolean
   reason?: string
 }
+
+/** 事实核查超时上限：校验不该拖慢主回答，超时视为通过(valid: true) */
+export const JUDGE_TIMEOUT_MS = 5000
 
 async function validateAnswer(answer: string, observations: string[]): Promise<ValidationResult> {
   if (!answer.trim() || observations.length === 0) return { valid: true }
@@ -43,6 +48,8 @@ ${answer}
 
   try {
     const url = `${LLM_BASE_URL}/v1/chat/completions`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), JUDGE_TIMEOUT_MS)
     const res = await fetch(url, {
       method: 'POST',
       headers: {
@@ -58,7 +65,8 @@ ${answer}
           { role: 'user', content: '请判断' },
         ],
       }),
-    })
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer))
     if (!res.ok) return { valid: true }
 
     const data = (await res.json()) as { choices: Array<{ message: { content: string } }> }
@@ -104,8 +112,13 @@ export async function* runAgent(
   // "暂无相关信息" 仅由 Agent 自身在确实查不到结果时输出。
   if (allContent.trim() && allObservations.length > 0) {
     const result = await validateAnswer(allContent, allObservations)
+    logFactCheck({
+      conversationId: options?.conversationId,
+      userId: options?.userId,
+      valid: result.valid,
+      reason: result.reason,
+    })
     if (!result.valid) {
-      console.warn(`[Agent] Fact-check failed: ${result.reason}`)
       yield { type: 'warning', content: result.reason || '回答可能包含未经验证的信息' }
     }
   }

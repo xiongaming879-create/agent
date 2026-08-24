@@ -16,6 +16,8 @@ import { buildDateContext, buildKnowledgeContext } from './knowledge'
 import { buildMemoryContext } from './memory-recall'
 import { wrapAllTools } from './tool-adapter'
 import { langchainAgentRunner } from './langchain-adapter'
+import { logQueryClassified } from './logger'
+import { loadPrompt, renderPrompt } from './prompt-loader'
 import { tools as allTools, lcTools } from '../tools'
 
 interface ChatMessage {
@@ -27,6 +29,7 @@ interface AgentOptions {
   systemPrompt?: string
   complexity?: Complexity
   userId?: string
+  conversationId?: string
 }
 
 // ============================================================================
@@ -164,31 +167,14 @@ export function getToolFilter(category: QueryCategory): string[] | null {
 }
 
 // ============================================================================
-// 强制轮次管控规则（强制并行工具调用，减少串行轮次）
+// 强制轮次管控规则 / RAG 检索约束已抽到 prompts/shared/*.txt（Task 6 prompt 外部化）
 // ============================================================================
-
-export const PARALLEL_TOOL_RULES = `# 【强制轮次管控规则，必须严格遵守】
-1. 无依赖的独立查询**必须在单轮一次性并行调用多个工具**，禁止逐个串行调用占用多轮：
-   - 多条关键词搜索 -> 一轮多个search并行
-   - search返回多条有效URL -> 一轮多个fetch并行抓取
-   - 多文件读取/多数学表达式计算 -> 批量调用
-2. 工具依赖仅允许必要串行：search -> 批量fetch；browser_navigate后批量交互
-3. 单轮最多发起8个并行工具调用，超出则拆分为下一轮，但尽可能合并
-4. 同一关键词/同一URL连续调用2次判定为无效循环，禁止再次调用
-5. 每一轮思考必须输出判断：【当前信息是否足以完整回答用户问题：是/否】，判定为"是"立即终止所有工具调用直接输出答案`
-
-const RAG_PROMPT_CONSTRAINTS = `
-## 知识库检索约束(knowledge_search 被调用时生效)
-- 只允许使用检索到的上下文内容回答,禁止推理、猜测、补充外部知识
-- 上下文无答案时统一回复:"知识库中未查询到相关内容,无法解答该问题"
-- 引用答案必须标注来源:文档名 + 页码(如【来源:xxx.pdf p12】)
-- 检索结果不超过 5 条,不要堆砌无关内容`
 
 // ============================================================================
 // Helpers: LangChain agent 创建 + 工具列表文本
 // ============================================================================
 
-const MAX_ITERATIONS_FULL = 50
+const MAX_ITERATIONS_FULL = 25
 const MAX_ITERATIONS_LIGHT = 10
 
 function createAgent(model: string, tools: DynamicStructuredTool<Record<string, unknown>>[], systemContent: string) {
@@ -226,14 +212,11 @@ function getAllLcTools(): DynamicStructuredTool<Record<string, unknown>>[] {
 async function* runChitchat(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
   const query = getLastUserQuery(messages)
   const memoryContext = await buildMemoryContext(options.userId, query)
-  const prompt = `${buildDateContext()}
-
-你是一个智能 AI 助手。用与用户相同的语言回复。
-- 简洁友好地回答
-- 不需要使用任何工具
-- 适当使用 markdown 格式
-${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${memoryContext}`
+  const prompt = renderPrompt(loadPrompt('chitchat'), {
+    dateContext: buildDateContext(),
+    systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',
+    memoryContext,
+  })
 
   yield* streamLLM(messages, prompt, MODEL_LIGHT)
 }
@@ -247,20 +230,13 @@ const FALLBACK_SIGNAL = '__FALLBACK_TO_SEARCH__'
 async function* runKnowledge(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
   const query = getLastUserQuery(messages)
   const memoryContext = await buildMemoryContext(options.userId, query)
-  const prompt = `${buildDateContext()}
-
-${buildKnowledgeContext()}
-
-你是一个智能 AI 助手。用与用户相同的语言回复。
-
-## 回答规则
-- 优先使用上方内置知识库回答，不要调用任何工具，不要搜索
-- 如果内置知识完全覆盖了用户问题，直接给出准确回答
-- **如果内置知识不足以回答**，只输出 ${FALLBACK_SIGNAL}（不要加其他内容）
-- 回答简洁清晰，适当使用 markdown
-- 事实性内容标注来源：【来源：内置知识库】
-${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${memoryContext}`
+  const prompt = renderPrompt(loadPrompt('knowledge'), {
+    dateContext: buildDateContext(),
+    knowledgeContext: buildKnowledgeContext(),
+    fallbackSignal: FALLBACK_SIGNAL,
+    systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',
+    memoryContext,
+  })
 
   // 缓冲完整输出，检测 fallback 信号
   let fullOutput = ''
@@ -297,27 +273,15 @@ async function* runCalculation(messages: ChatMessage[], options: AgentOptions): 
   const filteredTools = filterTools(allLcTools, ['calculator'])
   const toolList = buildToolListFromLcTools(filteredTools)
 
-  const prompt = `${buildDateContext()}
-
-你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。用与用户相同的语言回复。
-
-${PARALLEL_TOOL_RULES}
-
-## 数学计算
-- 遇到中文/白话文数学题时，先在思考中将题目转为标准数学表达式，再调用 calculator
-- 例如："根号5加根号9" -> sqrt(5)+sqrt(9)，"x²的导数" -> derivative('x^2','x')
-
-## 回答要求
-- 基于计算结果组织回答
-- 适当使用 markdown 格式
-- 简洁清晰
-
-Available tools:
-${toolList}
-${options.systemPrompt ? `\n${options.systemPrompt}` : ''}`
+  const prompt = renderPrompt(loadPrompt('calculation'), {
+    dateContext: buildDateContext(),
+    parallelRules: loadPrompt('shared/parallel-rules'),
+    toolList,
+    systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',
+  })
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
-  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_LIGHT })
+  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_LIGHT, userId: options.userId, conversationId: options.conversationId })
 }
 
 // ============================================================================
@@ -331,44 +295,18 @@ async function* runSearch(messages: ChatMessage[], options: AgentOptions): Async
   const filteredTools = filterTools(allLcTools, ['search', 'fetch', 'browser_*', 'knowledge_search'])
   const toolList = buildToolListFromLcTools(filteredTools)
 
-  const prompt = `${buildDateContext()}
-
-${buildKnowledgeContext()}
-
-你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。用与用户相同的语言回复。
-
-${PARALLEL_TOOL_RULES}
-
-## 工具使用策略
-- **按需搜索**：仅当需要实时信息才调用 search/fetch
-- **并行调用**：多个独立的搜索/抓取可以同一轮并行调用
-- **适时停止**：
-  - 获取到足够信息后立即综合回答，不要再多搜
-  - 不要用相同关键词反复搜索
-  - 搜索类工具总调用不超过 25 次，重复相同输入会被强制拦截
-- **搜索容错**：
-  - search 超时 -> 简化关键词重试 -> 再失败用已有信息继续
-- **本地知识库优先**：用户问已上传文档/历史问答时,先调 knowledge_search 检索本地知识库,无命中再联网
-- **工具选择优先级**：
-  1. knowledge_search：检索本地知识库(历史对话/记忆/已上传文档)
-  2. search：搜索关键词，获取结果 + URL
-  3. fetch：只在 search 返回具体 URL 后抓取详情，不要猜测 URL
-  4. browser_*：仅当页面需要 JS 渲染时才用
-
-## 回答要求
-- 基于工具返回内容组织回答，不要编造
-- 无法确定时明确说明
-- 事实性内容标注来源：【来源：xxx】
-- 适当使用 markdown 格式
-${RAG_PROMPT_CONSTRAINTS}
-
-Available tools:
-${toolList}
-${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${memoryContext}`
+  const prompt = renderPrompt(loadPrompt('search'), {
+    dateContext: buildDateContext(),
+    knowledgeContext: buildKnowledgeContext(),
+    parallelRules: loadPrompt('shared/parallel-rules'),
+    ragConstraints: loadPrompt('shared/rag-constraints'),
+    toolList,
+    systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',
+    memoryContext,
+  })
 
   const agent = createAgent(MODEL_LIGHT, filteredTools, prompt)
-  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId })
+  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId, conversationId: options.conversationId })
 }
 
 // ============================================================================
@@ -381,45 +319,18 @@ async function* runComplex(messages: ChatMessage[], options: AgentOptions): Asyn
   const allLcTools = getAllLcTools()
   const toolList = buildToolListFromLcTools(allLcTools)
 
-  const prompt = `${buildDateContext()}
-
-${buildKnowledgeContext()}
-
-你是一个智能 AI 助手，能够通过思考和使用工具来回答用户问题。用与用户相同的语言回复。
-
-## 需求澄清（优先于工具调用）
-- 检查关键信息是否缺失、需求是否模糊
-- 若信息不足，直接向用户提问，不要调用工具
-
-${PARALLEL_TOOL_RULES}
-
-## 工具使用策略
-- **知识优先**：节假日、日期、常识性信息直接用内置知识，不要搜索
-- **按需搜索**：仅当需要实时信息才调用 search/fetch
-- **并行调用**：多个独立的搜索/抓取可以同一轮并行调用
-- **适时停止**：获取到足够信息后立即综合回答，不要用相同关键词反复搜索
-- **搜索容错**：search 超时 -> 简化关键词重试 -> 再失败用已有信息继续
-- **本地知识库**：用户问已上传文档/历史问答时,调 knowledge_search 检索本地知识库
-- **工具选择优先级**：knowledge_search 查本地 -> search 搜关键词 -> fetch 抓 URL -> browser_ 仅用于 JS 渲染页面
-
-## 数学计算
-- 遇到中文/白话文数学题时，先转为标准数学表达式，再调用 calculator
-
-## 回答要求
-- 回答应准确、清晰、有条理
-- 适当使用 markdown 格式
-- 基于工具返回内容和内置知识组织回答，不要编造
-- 事实性内容标注来源
-- 无法确定时明确说明
-${RAG_PROMPT_CONSTRAINTS}
-
-Available tools:
-${toolList}
-${options.systemPrompt ? `\n${options.systemPrompt}` : ''}
-${memoryContext}`
+  const prompt = renderPrompt(loadPrompt('complex'), {
+    dateContext: buildDateContext(),
+    knowledgeContext: buildKnowledgeContext(),
+    parallelRules: loadPrompt('shared/parallel-rules'),
+    ragConstraints: loadPrompt('shared/rag-constraints'),
+    toolList,
+    systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',
+    memoryContext,
+  })
 
   const agent = createAgent(MODEL_STRONG, allLcTools, prompt)
-  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId })
+  yield* langchainAgentRunner(agent, messages, { maxIterations: MAX_ITERATIONS_FULL, userId: options.userId, conversationId: options.conversationId })
 }
 
 // ============================================================================
@@ -438,8 +349,10 @@ export async function* runRoutedAgent(
   const query = lastUserMsg?.content || ''
   const hasHistory = messages.length > 1
   const complexity = options.complexity || 'medium'
+  const classifyStart = Date.now()
 
   let category: QueryCategory
+  let ruleMatched: boolean | null = null
 
   // complexity 覆盖
   if (complexity === 'deep') {
@@ -447,11 +360,22 @@ export async function* runRoutedAgent(
   } else if (complexity === 'fast') {
     // fast: 强制轻量，不走 COMPLEX。规则判断走 CHITCHAT/KNOWLEDGE/CALCULATION/SEARCH
     const ruleResult = classifyByRules(query, hasHistory)
+    ruleMatched = !!ruleResult
     category = ruleResult && ruleResult !== 'COMPLEX' ? ruleResult : 'KNOWLEDGE'
   } else {
-    // medium: 走分类
-    category = await classifyQuery(query, hasHistory)
+    // medium: 走分类（规则优先，未命中 LLM 兜底）
+    const ruleResult = classifyByRules(query, hasHistory)
+    ruleMatched = !!ruleResult
+    category = ruleResult ?? await classifyQuery(query, hasHistory)
   }
+
+  logQueryClassified({
+    conversationId: options.conversationId,
+    userId: options.userId,
+    category,
+    ruleMatched,
+    durationMs: Date.now() - classifyStart,
+  })
 
   yield { type: 'thought', content: `【路由】查询类别: ${category}（模型: ${category === 'COMPLEX' ? MODEL_STRONG : MODEL_LIGHT}）` }
 

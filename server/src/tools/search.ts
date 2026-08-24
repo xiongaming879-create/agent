@@ -2,6 +2,24 @@ import * as cheerio from 'cheerio'
 
 const MAX_CONTENT_LENGTH = 4000
 const FETCH_TIMEOUT = 15000
+const SEARCH_TIMEOUT = 15000
+
+const ZHIPU_API_KEY = process.env.ZHIPU_API_KEY || ''
+const ZHIPU_BASE_URL = process.env.ZHIPU_BASE_URL || 'https://open.bigmodel.cn'
+const ZHIPU_SEARCH_ENGINE = process.env.ZHIPU_SEARCH_ENGINE || 'search_std'
+
+/** 智谱搜索引擎回退优先级：std -> pro -> quark -> sogou */
+const ZHIPU_ENGINE_DEFAULT_ORDER = ['search_std', 'search_pro', 'search-pro-quark', 'search-pro-sogou']
+
+/**
+ * 构建引擎回退链：配置的引擎优先，耗尽/报错后按默认优先级轮换到下一个，
+ * 兜底回到链首（如 sogou 之后回 search_std）。
+ */
+export function buildEngineChain(configured: string): string[] {
+  const idx = ZHIPU_ENGINE_DEFAULT_ORDER.indexOf(configured)
+  if (idx === -1) return [configured, ...ZHIPU_ENGINE_DEFAULT_ORDER]
+  return [...ZHIPU_ENGINE_DEFAULT_ORDER.slice(idx), ...ZHIPU_ENGINE_DEFAULT_ORDER.slice(0, idx)]
+}
 
 /**
  * Detect if the input looks like a search query rather than a URL.
@@ -17,14 +35,6 @@ function isSearchQuery(input: string): boolean {
   // If no dot and no path, treat as query
   if (!input.includes('.') && !input.includes('/')) return true
   return false
-}
-
-/**
- * Convert a search query to a search engine URL.
- * Bing (cn.bing.com) is reachable in China; DuckDuckGo is blocked/unstable.
- */
-function queryToSearchUrl(query: string): string {
-  return `https://cn.bing.com/search?q=${encodeURIComponent(query.trim())}`
 }
 
 export async function fetchHtml(url: string): Promise<string> {
@@ -70,9 +80,74 @@ export function extractText(html: string): string {
   return text.length > MAX_CONTENT_LENGTH ? text.slice(0, MAX_CONTENT_LENGTH) : text
 }
 
+// --- 智谱 web-search-pro ---
+
+interface ZhipuSearchResult {
+  title?: string
+  link?: string
+  content?: string
+  media?: string
+  publish_date?: string
+}
+
+/** 把智谱搜索结果格式化为 LLM 友好的编号列表 */
+export function formatZhipuResults(results: ZhipuSearchResult[]): string {
+  if (results.length === 0) return '搜索无结果'
+  return results
+    .map((r, i) => `[${i + 1}] ${r.title || ''}\n${r.link || ''}\n${r.content || ''}`)
+    .join('\n\n')
+    .slice(0, MAX_CONTENT_LENGTH)
+}
+
+async function searchWithEngine(engine: string, query: string): Promise<string> {
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT)
+  try {
+    const res = await fetch(`${ZHIPU_BASE_URL}/api/paas/v4/web_search`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ZHIPU_API_KEY}`,
+      },
+      body: JSON.stringify({
+        search_engine: engine,
+        search_query: query,
+        count: 10,
+        content_size: 'medium',
+      }),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+    const data = (await res.json()) as { search_result?: ZhipuSearchResult[] }
+    return formatZhipuResults(data.search_result || [])
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new Error('Request timeout')
+    }
+    throw err
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export async function searchViaZhipu(query: string): Promise<string> {
+  let lastErr: unknown = null
+  for (const engine of buildEngineChain(ZHIPU_SEARCH_ENGINE)) {
+    try {
+      return await searchWithEngine(engine, query)
+    } catch (err) {
+      lastErr = err
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('智谱搜索全部引擎失败')
+}
+
 export async function searchTool(input: string): Promise<string> {
-  // Auto-detect: if input is a search query, convert to Bing search URL
-  const url = isSearchQuery(input) ? queryToSearchUrl(input) : input
-  const html = await fetchHtml(url)
+  // 搜索词走智谱 web-search-pro API；URL 走直接抓取
+  if (isSearchQuery(input)) {
+    if (!ZHIPU_API_KEY) throw new Error('Tool error: ZHIPU_API_KEY 未配置，无法执行搜索')
+    return searchViaZhipu(input)
+  }
+  const html = await fetchHtml(input)
   return extractText(html)
 }
