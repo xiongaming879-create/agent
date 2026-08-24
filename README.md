@@ -5,7 +5,7 @@
 ## 功能特性
 
 - **查询分类路由** - 规则 + LLM 兜底，将查询分流到 5 条路径（CHITCHAT/KNOWLEDGE/CALCULATION/SEARCH/COMPLEX），按路径选模型、过滤工具
-- **多模型调度** - 轻量模型（`deepseek-v4-flash`）处理简单路径，强模型（`glm-5.2`）处理复杂路径
+- **多模型调度** - 轻量模型（`deepseek-ai/DeepSeek-V4-Flash`）处理简单路径，强模型（`zai-org/GLM-5.2`）处理复杂路径
 - **复杂度覆盖** - 前端 `fast/medium/deep` 三档覆盖分类结果，`fast` 强制轻量、`deep` 强制 COMPLEX
 - **长期记忆系统** - 两层架构：已提升 Rules 全量注入 system prompt（全局上下文，不走向量检索）+ 未提升 Candidates 向量检索 top-3（按 query 相关性，ES BM25+kNN+rerank）；会话级 Episode 提取 → Candidate 候选 → 规则提升（跨会话/失败教训/显式标记）
 - **内置知识库** - 节假日日期、动态当前日期、常识性信息，避免无意义联网搜索
@@ -15,7 +15,7 @@
 - **消息分支** - 编辑任意消息生成分支，`parent_id` 构成树结构，支持分支导航切换
 - **流式输出** - SSE 打字机效果，实时流式返回 Agent 回复
 - **MCP 工具扩展** - 通过 `.mcp.json` 动态加载外部工具，stdio / SSE 两种传输
-- **内置工具** - 网页搜索（Bing）、虚拟文件系统、高等数学计算器
+- **内置工具** - 网页搜索（智谱 web-search-pro）、虚拟文件系统、高等数学计算器
 - **用户认证与多租户** - JWT 登录、bcrypt 密码、admin/user 角色、对话归属隔离、孤儿对话认领
 - **个人设置** - 头像上传、主题（light/dark/auto）、字号、修改密码
 - **管理后台** - admin 角色可查看所有用户与其对话历史
@@ -38,7 +38,7 @@
 | 后端 | Node.js + Express | ^4.21.0 | REST + SSE |
 | 数据库 | sql.js (WASM SQLite) | ^1.11.0 | 主库 + 记忆库双库 |
 | LLM 编排 | LangChain + LangGraph | ^1.4.x | `createReactAgent` ReAct 循环 |
-| LLM 接入 | Anthropic 兼容 API | - | 仅 `stream:true` |
+| LLM 接入 | OpenAI 兼容 API（硅基流动） | - | 流式/非流式两套实现 |
 | MCP 客户端 | @modelcontextprotocol/sdk | ^1.29.0 | 动态工具发现 |
 | 认证 | jsonwebtoken + bcryptjs | ^9 / ^3 | JWT 7d + 密码哈希 |
 | 文件上传 | multer | ^2.2.0 | 头像上传 |
@@ -133,11 +133,11 @@ cd server && npm install
 在 `server/` 目录下创建 `.env` 文件：
 
 ```env
-# LLM 接入
-ANTHROPIC_AUTH_TOKEN=your-api-key
-ANTHROPIC_BASE_URL=https://api.anthropic.com
-AGENT_MODEL_LIGHT=deepseek-v4-flash
-AGENT_MODEL_STRONG=glm-5.2
+# LLM 接入（硅基流动 OpenAI 兼容接口；兼容链也接受 ANTHROPIC_AUTH_TOKEN）
+SILICONFLOW_API_KEY=your-api-key
+SILICONFLOW_BASE_URL=https://api.siliconflow.cn
+AGENT_MODEL_LIGHT=deepseek-ai/DeepSeek-V4-Flash
+AGENT_MODEL_STRONG=zai-org/GLM-5.2
 
 # 认证
 JWT_SECRET=your-jwt-secret
@@ -441,6 +441,7 @@ sequenceDiagram
 | `observation` | `{content}` | 工具执行结果 |
 | `content_delta` | `{content}` | 最终回答片段（打字机效果） |
 | `content` | `{content}` | 完整回答内容（兜底汇总） |
+| `warning` | `{content}` | 事实核查失败警告（不覆盖回答，前端黄色警告条） |
 | `done` | - | 循环结束 |
 | `error` | `{message}` | 流异常 |
 
@@ -529,7 +530,7 @@ flowchart TD
 | `sqlite` | stdio | `uvx mcp-server-sqlite --db-path agent.db` | SQLite 查询 |
 | `amap-maps` | stdio | `npx -y @amap/amap-maps-mcp-server` | 高德地图（需 API Key） |
 
-**工具适配关键点**：代理 API 可能不支持 `tools` 参数，模型会以文本形式调用 `{"input":"..."}`。`tool-adapter.ts` 的 `wrapAllTools` 跳过已有 schema 的 MCP 工具，`mcp/client.ts` 在 Zod schema 中额外接受 `input` 别名字段并在运行时重映射到 `url`/`query`/`path` 等真实参数名。
+**工具适配关键点**：ReAct 走原生 tool-calling（LangGraph `createReactAgent` + ChatOpenAI）。`tool-adapter.ts` 的 `wrapAllTools` 把内置自定义工具包成 `{input: string}` schema，并跳过已有 schema 的 MCP 工具；`mcp/client.ts` 在 Zod schema 中额外接受 `input` 别名字段并在运行时重映射到 `url`/`query`/`path` 等真实参数名（历史兼容）。并行调用约束见 `prompts/shared/parallel-rules.txt`。
 
 ### 6. 认证与权限流程
 
@@ -708,10 +709,10 @@ flowchart LR
 
 | 变量 | 默认值 | 必需 | 说明 |
 |------|--------|------|------|
-| ANTHROPIC_AUTH_TOKEN | - | ✅ | API 密钥（兼容 `ANTHROPIC_API_KEY`） |
-| ANTHROPIC_BASE_URL | https://api.anthropic.com | ✅ | API 代理地址 |
-| AGENT_MODEL_LIGHT | deepseek-v4-flash | ❌ | 轻量模型（CHITCHAT/KNOWLEDGE/CALCULATION/SEARCH + 分类器） |
-| AGENT_MODEL_STRONG | glm-5.2 | ❌ | 强模型（COMPLEX 路径） |
+| SILICONFLOW_API_KEY | - | ✅ | LLM API 密钥（兼容链: SILICONFLOW_DEEPSEEK_V4_FLASH → SILICONFLOW_GLM_52 → ANTHROPIC_API_KEY → ANTHROPIC_AUTH_TOKEN） |
+| SILICONFLOW_BASE_URL | https://api.siliconflow.cn | ✅ | OpenAI 兼容 API 地址 |
+| AGENT_MODEL_LIGHT | deepseek-ai/DeepSeek-V4-Flash | ❌ | 轻量模型（CHITCHAT/KNOWLEDGE/CALCULATION/SEARCH + 分类器） |
+| AGENT_MODEL_STRONG | zai-org/GLM-5.2 | ❌ | 强模型（COMPLEX 路径） |
 | AGENT_MODEL | = AGENT_MODEL_LIGHT | ❌ | 向后兼容统一模型 |
 | JWT_SECRET | agent-chat-dev-secret-change-in-prod | ✅ | JWT 签名密钥 |
 | ADMIN_USERNAME | admin | ❌ | 管理员账号名 |
@@ -742,7 +743,7 @@ flowchart LR
 
 | 工具名 | 输入格式 | 说明 |
 |--------|---------|------|
-| search | URL 或搜索关键词 | Bing 搜索 / URL 抓取，cheerio 提取纯文本，4000 字截断，15s 超时 |
+| search | URL 或搜索关键词 | 智谱 web-search-pro API 搜索 / URL 抓取，cheerio 提取纯文本，4000 字截断，15s 超时 |
 | filesystem_read | 相对路径 | 读取虚拟工作区文件 |
 | filesystem_write | JSON `{path, content}` | 写入虚拟工作区文件 |
 | filesystem_list | 相对目录路径 | 列出目录内容 |
@@ -763,7 +764,7 @@ MCP 工具在服务启动时动态发现并注册，与内置工具并存。`cal
 7. **事实核查 warning 事件** - `validateAnswer` 检查回答是否编造，校验失败时 yield `warning` 事件，前端在气泡底部显示黄色警告条（不覆盖回答内容，因 Agent 会用内置知识，校验器无法区分"内置知识"和"编造"）
 8. **记忆异步提取 + 标准化调用** - SSE 流结束后 `extractSessionMemories` 与 `promoteCandidates` 均 fire-and-forget；extractor/promoter 统一用 `llm-caller.callLLM`（顶层 `system` 字段，修复 system-in-messages 隐患），`parseResponse` 剥离 markdown + 栈匹配 JSON + 中文冒号 fallback 容错
 9. **记忆提升优先级 + recall 双层架构** - cross_session（≥2 会话）→ failure_evidence（lesson）→ explicit（durable=1 或 user_preference 单会话）； 单会话不提升； rules 全量注入（SQLite ，全局上下文不走向量检索），candidates 向量检索 top-3（ES ，只注入  类型，ES 不可用时 fallback 全量截断 10 条）
-10. **MCP input 重映射** - 代理 API 可能不支持 `tools` 参数，模型以 `{"input":"..."}` 调用；Zod schema 额外接受 `input` 别名，运行时重映射到 `url`/`query`/`path`
+10. **原生 tool-calling + input 别名** - ReAct 走 OpenAI 兼容 function-calling，一轮可发多个 `tool_calls` 并行执行（LangGraph ToolNode 并发跑）；内置自定义工具统一包 `{input: string}` schema，MCP 工具带真 schema（`input` 别名仅历史兼容，运行时重映射到 `url`/`query`/`path`）
 11. **sql.js 异步** - 所有 db 操作必须 await；主库 5s 自动存盘，记忆库每次写立即存盘
 12. **ESM `__dirname`** - 用 `fileURLToPath(import.meta.url)` 替代
 13. **Windows child_process** - spawn 需要完整路径，npx 可能需 `.cmd` 后缀
@@ -775,16 +776,19 @@ MCP 工具在服务启动时动态发现并注册，与内置工具并存。`cal
 19. **admin 只读他人会话** - admin 查看其他用户会话时隐藏输入框（`showInput` 计算属性）
 20. **🚨 删库保护** - 禁止 DROP TABLE/DATABASE、删除 .db 文件、空数据覆盖；迁移只能 ADD COLUMN / CREATE TABLE IF NOT EXISTS
 
-## Tailwind 主题色值
+## Tailwind 主题色值（暗色，Ethereal Glass）
 
 | Token | 色值 | 用途 |
 |-------|------|------|
-| sidebar | #1A1A1A | 侧边栏背景 |
-| chat-bg | #F5F5F5 | 消息区背景 |
-| msg-border | #E0E0E0 | 边框 |
-| text-muted | #888888 | 次要文字 |
+| sidebar | #0A0A0A | 侧边栏背景 |
+| chat-bg | #080808 | 消息区背景 |
+| msg-border | #161616 | 边框 |
+| text-muted | #4d4d4d | 次要文字 |
+| surface | #0c0c0c | 卡片/表面 |
+| surface-hover | #161616 | hover 态 |
+| surface-active | #1a1a1a | 激活态 |
 
-圆角：bubble=8px，btn=4px
+圆角：bubble=12px，btn=6px（`darkMode: 'class'`）
 
 ## License
 

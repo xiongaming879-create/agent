@@ -6,7 +6,7 @@
     },
     "fetch": {
       "type": "sse",
-      "url": "https://mcp.api-inference.modelscope.net/ffcc96854ff241/sse",
+      "url": "https://mcp.api-inference.modelscope.net/5a6a9cdec07348/sse",
       "timeout": 60000
     },
     "filesystem": {
