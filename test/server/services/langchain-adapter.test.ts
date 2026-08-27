@@ -21,6 +21,9 @@ describe('langchain-adapter', () => {
     it('匹配 browser_navigate', () => {
       expect(isSearchTypeTool('browser_navigate')).toBe(true)
     })
+    it('匹配 parallel_search', () => {
+      expect(isSearchTypeTool('parallel_search')).toBe(true)
+    })
     it('不匹配 calculator', () => {
       expect(isSearchTypeTool('calculator')).toBe(false)
     })
@@ -83,8 +86,30 @@ describe('langchain-adapter', () => {
       expect(state.searchCallCount).toBe(5)
       expect(state.knowledgeSearchCallCount).toBe(5)
     })
+    it('parallel_search 按批内条数计数', () => {
+      const state = createSearchState()
+      checkSearchEffectiveness('parallel_search', '{"queries":["a","b","c"]}', 'result', state)
+      expect(state.searchCallCount).toBe(3)
+    })
+
+    it('parallel_search 非法输入按 1 计数', () => {
+      const state = createSearchState()
+      checkSearchEffectiveness('parallel_search', 'not-json', 'result', state)
+      expect(state.searchCallCount).toBe(1)
+    })
+
+    it('parallel_search 混合并发时同样受 25 次上限约束', () => {
+      const state = createSearchState()
+      for (let i = 0; i < 4; i++) {
+        checkSearchEffectiveness('parallel_search', `{"queries":["q${i}a","q${i}b","q${i}c","q${i}d","q${i}e","q${i}f"]}`, 'result', state)
+      }
+      // 4 批 x 6 条 = 24 次,再加一批 6 条 -> 30 > 25 停止
+      const result = checkSearchEffectiveness('parallel_search', '{"queries":["a","b","c","d","e","f"]}', 'result', state)
+      expect(state.searchCallCount).toBe(30)
+      expect(result.shouldStop).toBe(true)
+      expect(result.reason).toContain('超过上限')
+    })
   })
-})
 
   describe('isSearchTypeTool - playwright 工具全覆盖', () => {
     it('匹配 browser_click', () => {
@@ -164,6 +189,7 @@ describe('langchain-adapter', () => {
       expect(events.some(e => (e as { type: string }).type === 'done')).toBe(true)
     })
   })
+})
 
 vi.mock('../../../server/src/services/llm-caller', () => ({
   callLLM: vi.fn(),

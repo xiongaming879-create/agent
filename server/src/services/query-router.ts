@@ -133,7 +133,7 @@ const TOOL_FILTERS: Record<QueryCategory, string[] | null> = {
   CHITCHAT: [],
   KNOWLEDGE: [],
   CALCULATION: ['calculator'],
-  SEARCH: ['search', 'fetch', 'browser_*', 'knowledge_search'],
+  SEARCH: ['search', 'parallel_search', 'fetch', 'browser_*', 'knowledge_search'],
   COMPLEX: null,
 }
 

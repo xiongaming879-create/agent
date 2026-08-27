@@ -44,7 +44,7 @@ function normalizeToolInput(input: string): string {
 
 /** Whether a tool is a "search-type" tool that retrieves external info. */
 export function isSearchTypeTool(toolName: string): boolean {
-  return /^(search|knowledge_search|fetch|browser_)/i.test(toolName)
+  return /^(search|parallel_search|knowledge_search|fetch|browser_)/i.test(toolName)
 }
 
 /** 把输入拆成关键词（用于近似重复检测：换序/换措辞但无新信息） */
@@ -72,9 +72,18 @@ export function createSearchState(): SearchState {
   }
 }
 
-const MAX_SEARCH_CALLS = 25  // 搜索类工具总调用上限
+export const MAX_SEARCH_CALLS = 25  // 搜索类工具总调用上限
 const MAX_KNOWLEDGE_SEARCH_CALLS = 5  // 本地知识库检索上限(本地检索不该反复调)
 const MAX_NO_NEW_KEYWORD_CALLS = 3  // 连续无新关键词搜索上限(近似重复兜底)
+
+/** 从 parallel_search 的 toolInput 解析批内查询条数;解析失败按 1 计 */
+function parseParallelQueryCount(toolInput: string): number {
+  try {
+    const parsed = JSON.parse(toolInput) as { queries?: unknown }
+    if (Array.isArray(parsed.queries)) return Math.max(1, parsed.queries.length)
+  } catch { /* 非 JSON 输入 */ }
+  return 1
+}
 
 /**
  * 简化版停止检测：只看总次数 + 完全相同输入重复。
@@ -93,6 +102,9 @@ export function checkSearchEffectiveness(
   const isKnowledge = toolName === 'knowledge_search'
   if (isKnowledge) {
     state.knowledgeSearchCallCount++
+  } else if (toolName === 'parallel_search') {
+    // 按批内条数计数(含被额度截断未执行的:尝试了就计入,防反复试探绕过上限)
+    state.searchCallCount += parseParallelQueryCount(toolInput)
   } else {
     state.searchCallCount++
   }
@@ -205,7 +217,7 @@ export async function* langchainAgentRunner(
   try {
     const stream = await agent.stream(
       { messages: inputMessages },
-      { recursionLimit: options.maxIterations * 2, configurable: { userId: options.userId } }
+      { recursionLimit: options.maxIterations * 2, configurable: { userId: options.userId, searchState } }
     )
 
     for await (const chunk of stream) {

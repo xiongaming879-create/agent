@@ -4,11 +4,12 @@ import { searchTool } from './search'
 import { readFile, writeFile, listDir, deleteFile } from './filesystem'
 import { calculatorTool } from './calculator'
 import { knowledgeSearchTool } from './knowledge-search'
+import { parallelSearchTool } from './parallel-search'
 
 const builtInTools: Tool[] = [
   {
     name: 'search',
-    description: 'Fetch and extract text content. Pass a URL to fetch a specific page, or a search query (e.g. "2025年放假安排") to search the web via Google.',
+    description: 'Fetch and extract text content. Pass a URL to fetch a specific page, or a search query (e.g. "2025年放假安排") to search the web.',
     execute: async (url: string) => searchTool(url),
   },
   {
@@ -44,7 +45,7 @@ const builtInTools: Tool[] = [
 ]
 
 // DynamicStructuredTool instances (native LangChain tools, skip adapter wrapping)
-export const lcTools: DynamicStructuredTool<Record<string, unknown>>[] = [calculatorTool, knowledgeSearchTool]
+export const lcTools: DynamicStructuredTool<Record<string, unknown>>[] = [calculatorTool, knowledgeSearchTool, parallelSearchTool]
 
 export const tools: Tool[] = [...builtInTools]
 

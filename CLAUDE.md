@@ -225,6 +225,7 @@ POST 上传（multer，MD/TXT/PDF ≤10MB）、GET 列表、DELETE /:docId
 | 工具名 | 输入格式 | 说明 |
 |--------|---------|------|
 | search | URL 或搜索关键词 | 智谱 web-search-pro API 搜索 / URL 抓取，cheerio 提取纯文本，4000 字截断，15s 超时 |
+| parallel_search | JSON `{queries: string[]}` | 并行执行多个独立搜索词（并发 4，单批 ≤6 条），按【查询N】分段返回，软截断；受 searchCallCount 上限约束 |
 | filesystem_read | 相对路径 | 读取虚拟工作区文件 |
 | filesystem_write | JSON `{"path","content"}` | 写入虚拟工作区文件 |
 | filesystem_list | 相对目录路径 | 列出目录内容 |
@@ -232,7 +233,7 @@ POST 上传（multer，MD/TXT/PDF ≤10MB）、GET 列表、DELETE /:docId
 | calculator | JSON `{expression}` | 高等数学（mathjs + nerdamer），原生 DynamicStructuredTool |
 | knowledge_search | JSON `{query, docType?, tags?}` | RAG 检索本地知识库（历史对话/记忆/文档），BM25+kNN+rerank，top3-5 |
 
-MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search` 以原生 `DynamicStructuredTool` 注册，其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
+MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search` 以原生 `DynamicStructuredTool` 注册，其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
 
 ## MCP 配置
 

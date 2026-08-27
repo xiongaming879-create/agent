@@ -101,7 +101,7 @@
 │                                                                   │
 │  主库 agent.db:   conversations / messages / users / schema_v    │
 │  记忆库 memory.db: memory_episodes / memory_candidates / rules   │
-│  内置工具: search / filesystem_* / calculator                    │
+│  内置工具: search / parallel_search / filesystem_* / calculator  │
 │  MCP 工具: playwright / fetch / filesystem / sqlite / amap-maps  │
 └──────────────────────────────────────────────────────────────────┘
 ```
@@ -744,6 +744,7 @@ flowchart LR
 | 工具名 | 输入格式 | 说明 |
 |--------|---------|------|
 | search | URL 或搜索关键词 | 智谱 web-search-pro API 搜索 / URL 抓取，cheerio 提取纯文本，4000 字截断，15s 超时 |
+| parallel_search | JSON `{queries: string[]}` | 并行执行多个独立搜索词（并发 4，单批 ≤6 条），按【查询N】分段返回，软截断；受 searchCallCount 上限约束 |
 | filesystem_read | 相对路径 | 读取虚拟工作区文件 |
 | filesystem_write | JSON `{path, content}` | 写入虚拟工作区文件 |
 | filesystem_list | 相对目录路径 | 列出目录内容 |
@@ -751,7 +752,7 @@ flowchart LR
 | calculator | JSON `{expression}` | 高等数学：四则/三角/对数/矩阵/求导/积分/方程求解（mathjs + nerdamer） |
 | knowledge_search | JSON `{query, docType?, tags?}` | RAG 检索本地知识库（历史对话/记忆/已上传文档），BM25+kNN+rerank，返回带来源 top3-5 |
 
-MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
+MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
 
 ## 设计决策与已知陷阱
 
