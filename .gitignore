@@ -13,3 +13,7 @@ server/data/
 # 运行时日志（启动脚本重定向产生）
 *.log
 *.err
+
+# superpowers SDD worktrees
+.worktrees/
+.superpowers/
