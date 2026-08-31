@@ -1,0 +1,10 @@
+{
+  "workspace_mode": "virtual",
+  "sandbox_root": "",
+  "allow_absolute_path": false,
+  "allow_symbolic_link": false,
+  "allow_dangerous_delete": false,
+  "max_read_bytes": 2097152,
+  "auto_confirm_high_risk": false,
+  "enable_audit_log": true
+}
