@@ -21,17 +21,21 @@ function isPrefix(parent: string, child: string): boolean {
   return c === p || c.startsWith(p + path.sep)
 }
 
-function nearestExistingRealPath(full: string): string {
+// 逐级 lstat 检查 root→full 间是否有 symlink 组件:lstat 不跟随终组件,断链 junction/symlink 也能识别,
+// 避免 realpath 遇断链走 ENOENT 而跳过逃逸(断链指向 sandbox 外时 realpath 无法解析)
+function hasSymlinkComponent(root: string, full: string): boolean {
   let cur = full
-  for (;;) {
+  while (cur !== root) {
     try {
-      return fs.realpathSync(cur)
+      if (fs.lstatSync(cur).isSymbolicLink()) return true
     } catch {
-      const parent = path.dirname(cur)
-      if (parent === cur) return full
-      cur = parent
+      // 尚不存在的组件继续向上
     }
+    const parent = path.dirname(cur)
+    if (parent === cur) return false
+    cur = parent
   }
+  return false
 }
 
 export function resolveSandboxPath(rawPath: string, config: WorkspaceConfig): ResolvedPath {
@@ -45,19 +49,13 @@ export function resolveSandboxPath(rawPath: string, config: WorkspaceConfig): Re
 
   const root = path.resolve(config.sandbox_root)
   if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true })
-  const realRoot = fs.realpathSync(root)
 
   const full = path.resolve(root, trimmed)
   if (!isPrefix(root, full)) throw new SandboxError(`路径逃逸被拦截: ${rawPath}`, 'ESCAPE')
 
-  // 先逻辑前缀校验再真实解析:待创建路径无法直接 realpath,用最近存在祖先锚定校验
-  if (!config.allow_symbolic_link && !isPrefix(realRoot, nearestExistingRealPath(full))) {
+  // 逻辑前缀校验后逐级查 symlink 组件(覆盖已存在与断链两类逃逸)
+  if (!config.allow_symbolic_link && hasSymlinkComponent(root, full)) {
     throw new SandboxError(`软链接逃逸被拦截: ${rawPath}`, 'SYMLINK')
-  }
-  if (!config.allow_symbolic_link && fs.existsSync(full)) {
-    if (!isPrefix(realRoot, fs.realpathSync(full))) {
-      throw new SandboxError(`软链接逃逸被拦截: ${rawPath}`, 'SYMLINK')
-    }
   }
 
   return {

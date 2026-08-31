@@ -86,6 +86,32 @@ describe('resolveSandboxPath', () => {
     }
   })
 
+  it('断链软链接(指向不存在的外部目录)被拒绝(SYMLINK)', () => {
+    const missing = path.join(os.tmpdir(), `outside-missing-${Date.now()}`)
+    try {
+      fs.symlinkSync(missing, path.join(root, 'sub', 'leak'), linkType)
+      expect(() => resolveSandboxPath('sub/leak/x', cfg)).toThrow(SandboxError)
+      try {
+        resolveSandboxPath('sub/leak/x', cfg)
+      } catch (e) {
+        expect((e as SandboxError).code).toBe('SYMLINK')
+      }
+    } finally {
+      fs.rmSync(missing, { recursive: true, force: true })
+    }
+  })
+
+  it('allow_symbolic_link=true 时断链软链接不拦截', () => {
+    const missing = path.join(os.tmpdir(), `outside-missing-${Date.now()}`)
+    try {
+      fs.symlinkSync(missing, path.join(root, 'sub', 'leak'), linkType)
+      const r = resolveSandboxPath('sub/leak/x', { ...cfg, allow_symbolic_link: true })
+      expect(r.realPath).toContain('x')
+    } finally {
+      fs.rmSync(missing, { recursive: true, force: true })
+    }
+  })
+
   it('尚不存在的深层文件路径可解析(取最近存在祖先做 realpath 校验)', () => {
     const r = resolveSandboxPath('sub/newdir/deep/new.txt', cfg)
     expect(r.realPath).toContain('new.txt')
