@@ -129,6 +129,137 @@ export const fsStatTool = new DynamicStructuredTool({
     }),
 })
 
+export const fsWriteFileTool = new DynamicStructuredTool({
+  name: 'fs_write_file',
+  description: '写入/覆盖本地文件(仅 local_fs 模式)。覆盖已有文件属高危操作,需用户确认(confirm=true)。',
+  schema: z.object({
+    path: relPath,
+    content: z.string().describe('要写入的文本内容'),
+    confirm: z.boolean().optional().describe('高危操作用户确认标记'),
+  }),
+  func: async ({ path: p, content, confirm }, _rm, config) =>
+    runFsTool('fs_write_file', p, config, (resolved, cfg) => {
+      if (fs.existsSync(resolved.realPath)) {
+        requireConfirmation({ toolName: 'fs_write_file', realPath: resolved.realPath, description: `覆盖已有文件 ${p}`, config: cfg, confirm })
+      }
+      return withPathLock(resolved.realPath, () => {
+        fs.mkdirSync(path.dirname(resolved.realPath), { recursive: true })
+        fs.writeFileSync(resolved.realPath, content, 'utf-8')
+        return `File written: ${p}`
+      })
+    }),
+})
+
+export const fsRmTool = new DynamicStructuredTool({
+  name: 'fs_rm',
+  description: '删除本地文件或目录(仅 local_fs 模式)。高危操作,默认需用户确认(confirm=true);非空目录批量删除另需 allow_dangerous_delete=true。',
+  schema: z.object({
+    path: relPath,
+    confirm: z.boolean().optional().describe('高危操作用户确认标记'),
+  }),
+  func: async ({ path: p, confirm }, _rm, config) =>
+    runFsTool('fs_rm', p, config, (resolved, cfg) => {
+      if (resolved.relativePath === '') return 'Error: 禁止删除沙箱根目录本身'
+      if (!fs.existsSync(resolved.realPath)) return `Error: 文件不存在: ${p}`
+      if (fs.statSync(resolved.realPath).isDirectory() && fs.readdirSync(resolved.realPath).length > 0 && !cfg.allow_dangerous_delete) {
+        return 'Error: 批量删除非空目录被禁止(config 中 allow_dangerous_delete=true 可放开)'
+      }
+      requireConfirmation({ toolName: 'fs_rm', realPath: resolved.realPath, description: `删除 ${p}`, config: cfg, confirm })
+      return withPathLock(resolved.realPath, () => {
+        fs.rmSync(resolved.realPath, { recursive: true, force: true })
+        return `Deleted: ${p}`
+      })
+    }),
+})
+
+export const fsCpTool = new DynamicStructuredTool({
+  name: 'fs_cp',
+  description: '复制本地文件/目录(仅 local_fs 模式,仅限沙箱内)。目标已存在属覆盖高危操作,需确认。',
+  schema: z.object({
+    src: relPath.describe('源路径'),
+    dest: relPath.describe('目标路径'),
+    confirm: z.boolean().optional().describe('高危操作用户确认标记'),
+  }),
+  func: async ({ src, dest, confirm }, _rm, config) => {
+    const cfg = loadWorkspaceConfig()
+    if (cfg.workspace_mode !== 'local_fs') {
+      return 'local_fs 工具未启用:当前 workspace_mode=virtual。将 server/config/workspace.json 的 workspace_mode 改为 local_fs 后重试。'
+    }
+    // src/dest 双重沙箱校验,任一逃逸即拦截
+    let srcR: ResolvedPath, destR: ResolvedPath
+    try {
+      srcR = resolveSandboxPath(src, cfg)
+      destR = resolveSandboxPath(dest, cfg)
+    } catch (err) {
+      if (err instanceof SandboxError) {
+        if (cfg.enable_audit_log) logFsAudit({ userId: config?.configurable?.userId ?? '', toolName: 'fs_cp', inputPath: `${src} -> ${dest}`, realPath: '', result: 'blocked', error: err.message })
+        return `Error: ${err.message}`
+      }
+      throw err
+    }
+    if (srcR.relativePath === '') return 'Error: 禁止复制沙箱根目录本身'
+    if (!fs.existsSync(srcR.realPath)) return `Error: 源不存在: ${src}`
+    try {
+      return await audited({ userId: config?.configurable?.userId ?? '', toolName: 'fs_cp', inputPath: `${src} -> ${dest}` }, destR.realPath, () => {
+        if (fs.existsSync(destR.realPath)) {
+          requireConfirmation({ toolName: 'fs_cp', realPath: destR.realPath, description: `覆盖已有目标 ${dest}`, config: cfg, confirm })
+        }
+        return withPathLock(srcR.realPath, () => {
+          fs.cpSync(srcR.realPath, destR.realPath, { recursive: true })
+          return `Copied: ${src} -> ${dest}`
+        })
+      })
+    } catch (err) {
+      if (err instanceof ConfirmRequiredError) return `CONFIRM_REQUIRED: ${err.message}`
+      return `Error: ${err instanceof Error ? err.message : String(err)}`
+    }
+  },
+})
+
+export const fsMvTool = new DynamicStructuredTool({
+  name: 'fs_mv',
+  description: '移动/重命名本地文件或目录(仅 local_fs 模式,仅限沙箱内)。目标已存在属覆盖高危操作,需确认。',
+  schema: z.object({
+    src: relPath.describe('源路径'),
+    dest: relPath.describe('目标路径'),
+    confirm: z.boolean().optional().describe('高危操作用户确认标记'),
+  }),
+  func: async ({ src, dest, confirm }, _rm, config) => {
+    const cfg = loadWorkspaceConfig()
+    if (cfg.workspace_mode !== 'local_fs') {
+      return 'local_fs 工具未启用:当前 workspace_mode=virtual。将 server/config/workspace.json 的 workspace_mode 改为 local_fs 后重试。'
+    }
+    let srcR: ResolvedPath, destR: ResolvedPath
+    try {
+      srcR = resolveSandboxPath(src, cfg)
+      destR = resolveSandboxPath(dest, cfg)
+    } catch (err) {
+      if (err instanceof SandboxError) {
+        if (cfg.enable_audit_log) logFsAudit({ userId: config?.configurable?.userId ?? '', toolName: 'fs_mv', inputPath: `${src} -> ${dest}`, realPath: '', result: 'blocked', error: err.message })
+        return `Error: ${err.message}`
+      }
+      throw err
+    }
+    if (srcR.relativePath === '') return 'Error: 禁止移动沙箱根目录本身'
+    if (!fs.existsSync(srcR.realPath)) return `Error: 源不存在: ${src}`
+    try {
+      return await audited({ userId: config?.configurable?.userId ?? '', toolName: 'fs_mv', inputPath: `${src} -> ${dest}` }, destR.realPath, () => {
+        if (fs.existsSync(destR.realPath)) {
+          requireConfirmation({ toolName: 'fs_mv', realPath: destR.realPath, description: `覆盖已有目标 ${dest}`, config: cfg, confirm })
+        }
+        return withPathLock(srcR.realPath, () => {
+          fs.renameSync(srcR.realPath, destR.realPath)
+          return `Moved: ${src} -> ${dest}`
+        })
+      })
+    } catch (err) {
+      if (err instanceof ConfirmRequiredError) return `CONFIRM_REQUIRED: ${err.message}`
+      return `Error: ${err instanceof Error ? err.message : String(err)}`
+    }
+  },
+})
+
 export const localFsTools: DynamicStructuredTool<Record<string, unknown>>[] = [
   fsReadFileTool, fsListDirTool, fsMkdirTool, fsStatTool,
+  fsWriteFileTool, fsRmTool, fsCpTool, fsMvTool,
 ]
