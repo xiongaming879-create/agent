@@ -281,7 +281,8 @@ agent/
 │       │   ├── search.ts             # Bing 搜索 / URL 抓取 + cheerio 提取
 │       │   ├── filesystem.ts         # 虚拟工作区 + 路径穿越防护
 │       │   ├── calculator.ts         # mathjs + nerdamer 高等数学
-│       │   └── knowledge-search.ts   # knowledge_search 工具（RAG 检索）
+│       │   ├── knowledge-search.ts   # knowledge_search 工具（RAG 检索）
+│       │   └── localfs/              # 本地文件系统工具（fs_* 8 个 + 沙箱/审计/确认/锁）
 │       ├── mcp/
 │       │   ├── config.ts             # 读取 .mcp.json, MCP_CONFIG_PATH 覆盖
 │       │   └── client.ts             # MCP SDK 客户端: stdio/sse + 工具发现 + Zod 转换
@@ -722,6 +723,7 @@ flowchart LR
 | MEMORY_DB_PATH | server/data/memory.db | ❌ | 记忆库路径 |
 | MCP_CONFIG_PATH | .mcp.json | ❌ | MCP 配置文件路径 |
 | WORKSPACE_ROOT | server/src/workspace | ❌ | 虚拟文件系统根目录 |
+| LOCAL_FS_CONFIG_PATH | server/config/workspace.json | ❌ | 本地文件系统沙箱配置路径（workspace_mode/sandbox_root 等） |
 | EMBEDDING_AND_RERANK_API_KEY | - | ❌* | 硅基流动 API key（RAG 必需，不配则降级） |
 | EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | 硅基流动 base_url |
 | EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
@@ -751,8 +753,16 @@ flowchart LR
 | filesystem_delete | 相对路径 | 删除文件/目录 |
 | calculator | JSON `{expression}` | 高等数学：四则/三角/对数/矩阵/求导/积分/方程求解（mathjs + nerdamer） |
 | knowledge_search | JSON `{query, docType?, tags?}` | RAG 检索本地知识库（历史对话/记忆/已上传文档），BM25+kNN+rerank，返回带来源 top3-5 |
+| fs_read_file | JSON `{path}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：读取本地文件（>2MB/二进制拒绝） |
+| fs_write_file | JSON `{path, content, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：写入/覆盖本地文件（覆盖需确认） |
+| fs_list_dir | JSON `{path, recursive?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：列出目录（深度≤3，≤500 项） |
+| fs_mkdir | JSON `{path}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：创建目录（支持多级） |
+| fs_rm | JSON `{path, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：删除文件/目录（高危需确认） |
+| fs_cp | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：复制（目标已存在需确认） |
+| fs_mv | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：移动/重命名（目标已存在需确认） |
+| fs_stat | JSON `{path}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：获取文件/目录信息 |
 
-MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
+MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search`/`fs_*` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。`fs_*` 工具仅在 `workspace_mode=local_fs` 时生效（否则返回未启用提示），配置在 `server/config/workspace.json`（3s 缓存，无需重启）。
 
 ## 设计决策与已知陷阱
 
