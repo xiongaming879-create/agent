@@ -136,6 +136,7 @@ agent/
 │       │   ├── search.ts        # 智谱 web-search-pro 搜索 + cheerio 提取
 │       │   ├── filesystem.ts    # 虚拟工作区 + 路径穿越防护
 │       │   ├── calculator.ts    # mathjs + nerdamer 高等数学
+│       │   ├── parallel-search.ts # parallel_search 并行搜索工具
 │       │   ├── knowledge-search.ts  # knowledge_search 工具（RAG 检索）
 │       │   └── localfs/          # 本地文件系统工具（fs_* 8 个 + 沙箱/审计/确认/锁）
 │       ├── mcp/
@@ -233,16 +234,16 @@ POST 上传（multer，MD/TXT/PDF ≤10MB）、GET 列表、DELETE /:docId
 | filesystem_delete | 相对路径 | 删除文件/目录 |
 | calculator | JSON `{expression}` | 高等数学（mathjs + nerdamer），原生 DynamicStructuredTool |
 | knowledge_search | JSON `{query, docType?, tags?}` | RAG 检索本地知识库（历史对话/记忆/文档），BM25+kNN+rerank，top3-5 |
-| fs_read_file | JSON `{path}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：读取本地文件（>2MB/二进制拒绝） |
+| fs_read_file | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：读取本地文件（>2MB/二进制拒绝） |
 | fs_write_file | JSON `{path, content, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：写入/覆盖本地文件（覆盖需确认） |
-| fs_list_dir | JSON `{path, recursive?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：列出目录（深度≤3，≤500 项） |
-| fs_mkdir | JSON `{path}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：创建目录（支持多级） |
+| fs_list_dir | JSON `{path, recursive?}` | 仅 local_fs 模式，沙箱 + 审计：列出目录（深度≤3，≤500 项） |
+| fs_mkdir | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：创建目录（支持多级） |
 | fs_rm | JSON `{path, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：删除文件/目录（高危需确认） |
 | fs_cp | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：复制（目标已存在需确认） |
 | fs_mv | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：移动/重命名（目标已存在需确认） |
-| fs_stat | JSON `{path}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：获取文件/目录信息 |
+| fs_stat | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：获取文件/目录信息 |
 
-MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search` 以原生 `DynamicStructuredTool` 注册，其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
+MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search`/`fs_*` 以原生 `DynamicStructuredTool` 注册，其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
 
 ## MCP 配置
 
