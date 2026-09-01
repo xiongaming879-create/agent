@@ -136,7 +136,9 @@ agent/
 │       │   ├── search.ts        # 智谱 web-search-pro 搜索 + cheerio 提取
 │       │   ├── filesystem.ts    # 虚拟工作区 + 路径穿越防护
 │       │   ├── calculator.ts    # mathjs + nerdamer 高等数学
-│       │   └── knowledge-search.ts  # knowledge_search 工具（RAG 检索）
+│       │   ├── parallel-search.ts # parallel_search 并行搜索工具
+│       │   ├── knowledge-search.ts  # knowledge_search 工具（RAG 检索）
+│       │   └── localfs/          # 本地文件系统工具（fs_* 8 个 + 沙箱/审计/确认/锁）
 │       ├── mcp/
 │       │   ├── config.ts        # 读取 .mcp.json, MCP_CONFIG_PATH 覆盖
 │       │   └── client.ts        # MCP SDK 客户端: stdio/sse + 工具发现 + Zod 转换
@@ -232,8 +234,16 @@ POST 上传（multer，MD/TXT/PDF ≤10MB）、GET 列表、DELETE /:docId
 | filesystem_delete | 相对路径 | 删除文件/目录 |
 | calculator | JSON `{expression}` | 高等数学（mathjs + nerdamer），原生 DynamicStructuredTool |
 | knowledge_search | JSON `{query, docType?, tags?}` | RAG 检索本地知识库（历史对话/记忆/文档），BM25+kNN+rerank，top3-5 |
+| fs_read_file | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：读取本地文件（>2MB/二进制拒绝） |
+| fs_write_file | JSON `{path, content, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：写入/覆盖本地文件（覆盖需确认） |
+| fs_list_dir | JSON `{path, recursive?}` | 仅 local_fs 模式，沙箱 + 审计：列出目录（深度≤3，≤500 项） |
+| fs_mkdir | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：创建目录（支持多级） |
+| fs_rm | JSON `{path, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：删除文件/目录（高危需确认） |
+| fs_cp | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：复制（目标已存在需确认） |
+| fs_mv | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：移动/重命名（目标已存在需确认） |
+| fs_stat | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：获取文件/目录信息 |
 
-MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search` 以原生 `DynamicStructuredTool` 注册，其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
+MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search`/`fs_*` 以原生 `DynamicStructuredTool` 注册，其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。
 
 ## MCP 配置
 
@@ -281,6 +291,7 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 | MEMORY_DB_PATH | server/data/memory.db | ❌ | 记忆库路径 |
 | MCP_CONFIG_PATH | .mcp.json | ❌ | MCP 配置文件路径 |
 | WORKSPACE_ROOT | server/src/workspace | ❌ | 虚拟文件系统根目录 |
+| LOCAL_FS_CONFIG_PATH | server/config/workspace.json | ❌ | 本地文件系统沙箱配置路径（workspace_mode/sandbox_root 等） |
 | EMBEDDING_AND_RERANK_API_KEY | (空) | ❌* | 硅基流动 key（RAG 必需，不配则降级） |
 | EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | embedding base_url |
 | EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
@@ -302,6 +313,7 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 - 禁止 `any`，用 `unknown`
 - 禁止 `eval()` / `innerHTML` / `v-html`
 - 🚨 **禁止删库**: 绝不执行 DROP TABLE/DATABASE、删除 .db 文件、或用空数据覆盖数据库；迁移只能增不能删
+- 本地文件操作必须经 `server/src/tools/localfs/` 中间层，禁止绕过沙箱直接 fs
 
 ### Agent 核心逻辑
 - ReAct 用 LangGraph `createReactAgent` **原生 tool-calling**（ChatOpenAI + OpenAI 兼容接口），非 prompt 驱动的 Action 解析
@@ -373,3 +385,4 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 15. **记忆异步提取** — `extractSessionMemories` / `promoteCandidates` 在 SSE 结束后 fire-and-forget，不阻塞响应
 16. **事实核查 warning** — `validateAnswer` 无法区分"内置知识"和"编造"（节假日/常识不在 observations），校验失败只 warning 不覆盖回答
 17. **🚨 删库保护** — 禁止 DROP TABLE/DATABASE、删除 .db 文件、空数据覆盖；迁移只能 ADD COLUMN / CREATE TABLE IF NOT EXISTS
+18. **fs_\* 工具仅 local_fs 模式生效** — `workspace_mode` 改 `server/config/workspace.json`（3s 缓存，无需重启）；高危删除/覆盖默认拦截，`auto_confirm_high_risk` 与 `allow_dangerous_delete` 慎开

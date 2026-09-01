@@ -138,3 +138,26 @@ export function logAgentError(
     stack: params.stack,
   })
 }
+
+export function logFsAudit(
+  params: LogContext & {
+    toolName: string
+    inputPath: string
+    realPath: string
+    result: 'success' | 'blocked' | 'error'
+    error?: string
+  }
+): void {
+  emit({
+    timestamp: now(),
+    level: params.result === 'success' ? 'info' : 'warn',
+    event: 'fs_audit',
+    conversationId: params.conversationId,
+    userId: params.userId,
+    toolName: params.toolName,
+    inputPath: params.inputPath,
+    realPath: params.realPath,
+    result: params.result,
+    error: params.error,
+  })
+}

@@ -5,6 +5,7 @@ import { readFile, writeFile, listDir, deleteFile } from './filesystem'
 import { calculatorTool } from './calculator'
 import { knowledgeSearchTool } from './knowledge-search'
 import { parallelSearchTool } from './parallel-search'
+import { localFsTools } from './localfs/tools'
 
 const builtInTools: Tool[] = [
   {
@@ -45,7 +46,7 @@ const builtInTools: Tool[] = [
 ]
 
 // DynamicStructuredTool instances (native LangChain tools, skip adapter wrapping)
-export const lcTools: DynamicStructuredTool<Record<string, unknown>>[] = [calculatorTool, knowledgeSearchTool, parallelSearchTool]
+export const lcTools: DynamicStructuredTool<Record<string, unknown>>[] = [calculatorTool, knowledgeSearchTool, parallelSearchTool, ...localFsTools]
 
 export const tools: Tool[] = [...builtInTools]
 
