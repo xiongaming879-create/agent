@@ -13,6 +13,8 @@ export interface ThoughtStep {
   content: string
   tool_name: string | null
   timestamp: string
+  duration_ms?: number
+  success?: boolean
 }
 
 export interface Message {
@@ -29,7 +31,7 @@ export type AgentEvent =
   | { type: 'thought'; content: string }
   | { type: 'thought_delta'; content: string }
   | { type: 'action'; tool_name: string; content: string }
-  | { type: 'observation'; content: string }
+  | { type: 'observation'; content: string; duration_ms?: number; success?: boolean }
   | { type: 'content'; content: string }
   | { type: 'content_delta'; content: string }
   | { type: 'warning'; content: string }

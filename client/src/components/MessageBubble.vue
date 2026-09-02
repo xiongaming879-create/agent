@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { Marked } from 'marked'
 import hljs from 'highlight.js'
 import type { Message } from '../types'
 import ThoughtStep from './ThoughtStep.vue'
 import BranchNavigator from './BranchNavigator.vue'
+import { groupThoughtSteps } from '../utils/thoughtGroup'
 
 const props = defineProps<{
   message: Message
@@ -33,10 +34,17 @@ const showThoughts = ref(false)
 
 const isTyping = computed(() => props.isStreaming && props.message.role === 'assistant')
 
-const stepCount = computed(() => {
-  const actions = props.message.thought_steps.filter(s => s.type === 'action').length
-  return actions > 0 ? actions : props.message.thought_steps.length
+const roundCount = computed(() => thoughtItems.value.filter(i => i.kind === 'round').length)
+
+// 流式开始自动展开,最终回答开始输出后自动收起(主流交互)
+watch(isTyping, (typing) => {
+  if (typing) showThoughts.value = true
 })
+watch(() => props.message.content, (c) => {
+  if (c && isTyping.value) showThoughts.value = false
+})
+
+const thoughtItems = computed(() => groupThoughtSteps(props.message.thought_steps))
 
 const renderedContent = computed(() => {
   if (!props.message.content) return ''
@@ -103,14 +111,22 @@ function copyCodeBlock(event: MouseEvent) {
     >
       <div v-if="message.role === 'assistant' && message.thought_steps.length > 0" class="mb-2">
         <button
-          class="flex items-center gap-1 text-white/30 text-[12px] hover:text-white/50 transition-colors"
+          class="flex items-center gap-1.5 text-white/30 text-[12px] hover:text-white/50 transition-colors"
           @click="showThoughts = !showThoughts"
         >
           <svg class="w-3 h-3 transition-transform duration-200" :class="showThoughts ? 'rotate-90' : ''" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7"/></svg>
-          思考过程 ({{ stepCount }}轮)
+          <template v-if="isTyping">
+            <span>思考中</span>
+            <span class="flex gap-0.5 items-end h-3">
+              <span class="w-1 h-1 rounded-full bg-white/40 animate-bounce [animation-delay:-0.3s]" />
+              <span class="w-1 h-1 rounded-full bg-white/40 animate-bounce [animation-delay:-0.15s]" />
+              <span class="w-1 h-1 rounded-full bg-white/40 animate-bounce" />
+            </span>
+          </template>
+          <template v-else>已深度思考{{ roundCount > 0 ? ` · ${roundCount} 轮工具` : '' }}</template>
         </button>
-        <div v-if="showThoughts" class="mt-2 space-y-1.5 pl-2">
-          <ThoughtStep v-for="(step, i) in message.thought_steps" :key="i" :step="step" :is-last="i === message.thought_steps.length - 1" :is-streaming="isTyping" />
+        <div v-if="showThoughts" class="mt-2 pl-2">
+          <ThoughtStep :items="thoughtItems" :is-streaming="isTyping" />
         </div>
         <div class="border-b border-white/10 mt-2 mb-2" />
       </div>

@@ -55,7 +55,11 @@ function processAgentStream(
         } else if (event.type === 'action') {
           thoughtSteps.push({ type: 'action', content: event.content, tool_name: event.tool_name, timestamp: new Date().toISOString() })
         } else if (event.type === 'observation') {
-          thoughtSteps.push({ type: 'observation', content: event.content, tool_name: null, timestamp: new Date().toISOString() })
+          thoughtSteps.push({
+            type: 'observation', content: event.content, tool_name: null,
+            timestamp: new Date().toISOString(),
+            duration_ms: event.duration_ms, success: event.success,
+          })
         } else if (event.type === 'content_delta') {
           fullContent += event.content
         } else if (event.type === 'content') {

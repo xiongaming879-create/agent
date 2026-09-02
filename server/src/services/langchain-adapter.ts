@@ -249,11 +249,10 @@ export async function* langchainAgentRunner(
 
         // Now emit events based on the full step
         if (stepHasToolCalls) {
-          // Intermediate turn: all text and thinking go as thoughts
-          const combined = stepThinking + stepText
-          if (combined) {
-            yield { type: 'thought_delta', content: combined }
-            yield { type: 'thought', content: combined.trim() }
+          // Intermediate turn: only thinking shown; draft text dropped
+          if (stepThinking.trim()) {
+            yield { type: 'thought_delta', content: stepThinking }
+            yield { type: 'thought', content: stepThinking.trim() }
           }
         } else {
           // Final turn (or no-tool turn)
@@ -296,7 +295,7 @@ export async function* langchainAgentRunner(
               durationMs: callInfo ? Date.now() - callInfo.startedAt : 0,
               success,
             })
-            yield { type: 'observation', content: output }
+            yield { type: 'observation', content: output, duration_ms: callInfo ? Date.now() - callInfo.startedAt : 0, success }
             observations.push(output)
 
             // 检测连续失败

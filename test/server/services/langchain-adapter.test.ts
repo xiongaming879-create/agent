@@ -196,7 +196,7 @@ vi.mock('../../../server/src/services/llm-caller', () => ({
 }))
 
 import { callLLM } from '../../../server/src/services/llm-caller'
-import { ToolMessage } from '../../../server/node_modules/@langchain/core/messages'
+import { ToolMessage, AIMessageChunk } from '../../../server/node_modules/@langchain/core/messages'
 import { synthesizeFromObservations } from '../../../server/src/services/langchain-adapter'
 
 describe('synthesizeFromObservations', () => {
@@ -278,5 +278,110 @@ describe('langchainAgentRunner - 停止后综合回答', () => {
     const contentEvents = events.filter(e => e.type === 'content')
     expect(contentEvents).toHaveLength(1)
     expect(contentEvents[0].content).toContain('搜索结果 1')
+  })
+})
+
+describe('langchainAgentRunner - 事件结构', () => {
+  it('中间轮次只发 thinking,丢弃草稿文本', async () => {
+    const agent = {
+      stream: async function* () {
+        yield {
+          agent: {
+            messages: [
+              new AIMessageChunk({
+                content: [
+                  { type: 'thinking', thinking: '正在思考检索方案' },
+                  { type: 'text', text: '草稿文本不应出现在思考区' },
+                ],
+                tool_calls: [{ id: 'tc1', name: 'search', args: { q: '量子计算' } }],
+              }),
+            ],
+          },
+        }
+        yield {
+          tools: { messages: [new ToolMessage({ content: '找到相关结果', tool_call_id: 'tc1', name: 'search' })] },
+        }
+      },
+    } as never
+
+    const events: Array<{ type: string; content?: string; tool_name?: string }> = []
+    for await (const e of langchainAgentRunner(
+      agent,
+      [{ role: 'user', content: '量子计算现状' }],
+      { maxIterations: 5 }
+    )) {
+      events.push(e as { type: string; content?: string; tool_name?: string })
+    }
+
+    const thoughtText = events
+      .filter(e => e.type === 'thought' || e.type === 'thought_delta')
+      .map(e => e.content)
+      .join('')
+    expect(thoughtText).toContain('正在思考检索方案')
+    expect(thoughtText).not.toContain('草稿文本')
+  })
+
+  it('observation 事件携带 duration_ms 与 success', async () => {
+    const agent = {
+      stream: async function* () {
+        yield {
+          agent: {
+            messages: [
+              new AIMessageChunk({
+                content: [{ type: 'text', text: '' }],
+                tool_calls: [{ id: 'tc2', name: 'search', args: { q: 'x' } }],
+              }),
+            ],
+          },
+        }
+        yield {
+          tools: { messages: [new ToolMessage({ content: '正常结果', tool_call_id: 'tc2', name: 'search' })] },
+        }
+      },
+    } as never
+
+    const events: Array<{ type: string; duration_ms?: number; success?: boolean }> = []
+    for await (const e of langchainAgentRunner(
+      agent,
+      [{ role: 'user', content: 'q' }],
+      { maxIterations: 5 }
+    )) {
+      events.push(e as { type: string; duration_ms?: number; success?: boolean })
+    }
+
+    const obs = events.find(e => e.type === 'observation')
+    expect(obs).toBeDefined()
+    expect(typeof obs!.duration_ms).toBe('number')
+    expect(obs!.success).toBe(true)
+  })
+
+  it('失败工具结果 success 为 false', async () => {
+    const agent = {
+      stream: async function* () {
+        yield {
+          agent: {
+            messages: [
+              new AIMessageChunk({
+                content: [{ type: 'text', text: '' }],
+                tool_calls: [{ id: 'tc3', name: 'search', args: { q: 'x' } }],
+              }),
+            ],
+          },
+        }
+        yield {
+          tools: { messages: [new ToolMessage({ content: 'Tool error: 超时', tool_call_id: 'tc3', name: 'search' })] },
+        }
+      },
+    } as never
+
+    const events: Array<{ type: string; success?: boolean }> = []
+    for await (const e of langchainAgentRunner(
+      agent,
+      [{ role: 'user', content: 'q' }],
+      { maxIterations: 5 }
+    )) {
+      events.push(e as { type: string; success?: boolean })
+    }
+    expect(events.find(e => e.type === 'observation')?.success).toBe(false)
   })
 })
