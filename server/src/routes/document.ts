@@ -40,7 +40,8 @@ router.post('/', upload.single('file'), async (req, res) => {
       res.status(400).json({ error: 'File content is empty' })
       return
     }
-    const docId = `${req.user!.userId}:${fileName}:${Date.now()}`
+    // 稳定 docId:同名重传即覆盖(indexDocument 先按 doc_id+user_id 删旧 chunk,天然幂等)
+    const docId = `${req.user!.userId}:${fileName}`
     const docType = getDocType(fileName)
     const result = await indexDocument({
       text,
