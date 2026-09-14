@@ -53,4 +53,9 @@ describe('workspace config', () => {
     fs.writeFileSync(cfgFile, JSON.stringify({ workspace_mode: 'local_fs' }), 'utf-8')
     expect(loadWorkspaceConfig().enable_audit_log).toBe(true)
   })
+
+  it('读取 allowedDirectories 配置', () => {
+    fs.writeFileSync(cfgFile, JSON.stringify({ workspace_mode: 'local_fs', allowedDirectories: ['C:/a', 'C:/b'] }), 'utf-8')
+    expect(loadWorkspaceConfig().allowedDirectories).toEqual(['C:/a', 'C:/b'])
+  })
 })

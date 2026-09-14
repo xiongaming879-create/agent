@@ -1,10 +1,14 @@
 {
-  "workspace_mode": "virtual",
-  "sandbox_root": "",
-  "allow_absolute_path": false,
+  "workspace_mode": "local_fs",
+  "sandbox_root": "C:\\Users\\17620\\Desktop\\熊阿明\\code\\agent\\server\\sandbox",
+  "allow_absolute_path": true,
   "allow_symbolic_link": false,
   "allow_dangerous_delete": false,
   "max_read_bytes": 2097152,
   "auto_confirm_high_risk": false,
-  "enable_audit_log": true
+  "enable_audit_log": true,
+  "allowedDirectories": [
+    "C:\\Users\\17620\\Desktop\\熊阿明\\code\\agent",
+    "C:\\Users\\17620\\Desktop"
+  ]
 }

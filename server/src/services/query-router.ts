@@ -133,7 +133,7 @@ const TOOL_FILTERS: Record<QueryCategory, string[] | null> = {
   CHITCHAT: [],
   KNOWLEDGE: [],
   CALCULATION: ['calculator'],
-  SEARCH: ['search', 'parallel_search', 'fetch', 'browser_*', 'knowledge_search'],
+  SEARCH: ['search', 'parallel_search', 'fetch', 'browser_*', 'knowledge_search', 'fs_*'],
   COMPLEX: null,
 }
 
@@ -292,13 +292,14 @@ async function* runSearch(messages: ChatMessage[], options: AgentOptions): Async
   const query = getLastUserQuery(messages)
   const memoryContext = await buildMemoryContext(options.userId, query)
   const allLcTools = getAllLcTools()
-  const filteredTools = filterTools(allLcTools, ['search', 'fetch', 'browser_*', 'knowledge_search'])
+  const filteredTools = filterTools(allLcTools, ['search', 'fetch', 'browser_*', 'knowledge_search', 'fs_*'])
   const toolList = buildToolListFromLcTools(filteredTools)
 
   const prompt = renderPrompt(loadPrompt('search'), {
     dateContext: buildDateContext(),
     knowledgeContext: buildKnowledgeContext(),
     parallelRules: loadPrompt('shared/parallel-rules'),
+    highRiskRules: loadPrompt('shared/high-risk-rules'),
     ragConstraints: loadPrompt('shared/rag-constraints'),
     toolList,
     systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',
@@ -323,6 +324,7 @@ async function* runComplex(messages: ChatMessage[], options: AgentOptions): Asyn
     dateContext: buildDateContext(),
     knowledgeContext: buildKnowledgeContext(),
     parallelRules: loadPrompt('shared/parallel-rules'),
+    highRiskRules: loadPrompt('shared/high-risk-rules'),
     ragConstraints: loadPrompt('shared/rag-constraints'),
     toolList,
     systemPrompt: options.systemPrompt ? `\n${options.systemPrompt}` : '',

@@ -6,6 +6,8 @@
 
 {{parallelRules}}
 
+{{highRiskRules}}
+
 ## 工具使用策略
 - **按需搜索**：仅当需要实时信息才调用 search/fetch
 - **并行调用**：多个独立的搜索/抓取可以同一轮并行调用

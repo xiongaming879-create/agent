@@ -52,7 +52,7 @@ npm run test:watch
 
 ```
 agent/
-├── .mcp.json                    # MCP 服务器配置（5 个服务）
+├── .mcp.json                    # MCP 服务器配置（4 个服务）
 ├── CLAUDE.md                    # 本文件
 ├── README.md                    # 完整架构/流程/API 文档（含 mermaid 图）
 ├── ARCHITECTURE.md              # 混合架构设计文档（StateGraph 迁移方案）
@@ -247,13 +247,12 @@ MCP 工具在服务启动时动态发现并注册，与内置工具并存。`cal
 
 ## MCP 配置
 
-`.mcp.json` 配置 5 个 MCP 服务器：
+`.mcp.json` 配置 4 个 MCP 服务器：
 
 | 服务 | 类型 | 命令 | 用途 |
 |------|------|------|------|
 | playwright | stdio | `npx -y @playwright/mcp --headless` | 浏览器自动化（CLI flag 有头模式，勿用 SDK headless） |
 | fetch | sse | `https://mcp.api-inference.modelscope.net/.../sse` | 远程网页抓取（可能不稳定） |
-| filesystem | stdio | `npx -y @modelcontextprotocol/server-filesystem` | 本地文件系统访问 |
 | sqlite | stdio | `uvx mcp-server-sqlite` | SQLite 查询 |
 | amap-maps | stdio | `npx -y @amap/amap-maps-mcp-server` | 高德地图（需 `AMAP_MAPS_API_KEY`） |
 
@@ -291,7 +290,7 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 | MEMORY_DB_PATH | server/data/memory.db | ❌ | 记忆库路径 |
 | MCP_CONFIG_PATH | .mcp.json | ❌ | MCP 配置文件路径 |
 | WORKSPACE_ROOT | server/src/workspace | ❌ | 虚拟文件系统根目录 |
-| LOCAL_FS_CONFIG_PATH | server/config/workspace.json | ❌ | 本地文件系统沙箱配置路径（workspace_mode/sandbox_root 等） |
+| LOCAL_FS_CONFIG_PATH | server/config/workspace.json | ❌ | 本地文件系统沙箱配置路径（workspace_mode/sandbox_root/allowedDirectories 等） |
 | EMBEDDING_AND_RERANK_API_KEY | (空) | ❌* | 硅基流动 key（RAG 必需，不配则降级） |
 | EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | embedding base_url |
 | EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
@@ -386,3 +385,4 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 16. **事实核查 warning** — `validateAnswer` 无法区分"内置知识"和"编造"（节假日/常识不在 observations），校验失败只 warning 不覆盖回答
 17. **🚨 删库保护** — 禁止 DROP TABLE/DATABASE、删除 .db 文件、空数据覆盖；迁移只能 ADD COLUMN / CREATE TABLE IF NOT EXISTS
 18. **fs_\* 工具仅 local_fs 模式生效** — `workspace_mode` 改 `server/config/workspace.json`（3s 缓存，无需重启）；高危删除/覆盖默认拦截，`auto_confirm_high_risk` 与 `allow_dangerous_delete` 慎开
+19. **fs_\* 沙箱权限模型：allowedDirectories 白名单第一关** — 解析后真实路径不在 `allowedDirectories` 一律拒绝；`sandbox_root` 只是工作基准（相对路径解析起点 + 默认生成位置），不隐式入白名单；白名单为空回落 sandbox_root。`allow_absolute_path=true` 时白名单内绝对路径可用（Desktop 已入白名单）。MCP filesystem server 已移除，本地文件访问统一走 fs_*；SEARCH 路径工具白名单已含 `fs_*`

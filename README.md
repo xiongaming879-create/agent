@@ -522,15 +522,16 @@ flowchart TD
     L --> M
 ```
 
-**`.mcp.json` 当前配置（5 个服务）：**
+**`.mcp.json` 当前配置（4 个服务）：**
 
 | 服务 | 传输 | 命令 | 用途 |
 |------|------|------|------|
 | `playwright` | stdio | `npx -y @playwright/mcp` | 浏览器自动化（JS 渲染页面） |
 | `fetch` | sse | `https://mcp.api-inference.modelscope.net/.../sse` | 远程抓取 |
-| `filesystem` | stdio | `npx -y @modelcontextprotocol/server-filesystem` | 本地文件系统访问 |
 | `sqlite` | stdio | `uvx mcp-server-sqlite --db-path agent.db` | SQLite 查询 |
 | `amap-maps` | stdio | `npx -y @amap/amap-maps-mcp-server` | 高德地图（需 API Key） |
+
+> 本地文件访问已由内置 `fs_*` 工具（localfs 沙箱中间层，白名单 + 高危确认 + 审计）承接，MCP filesystem server 已移除。
 
 **工具适配关键点**：ReAct 走原生 tool-calling（LangGraph `createReactAgent` + ChatOpenAI）。`tool-adapter.ts` 的 `wrapAllTools` 把内置自定义工具包成 `{input: string}` schema，并跳过已有 schema 的 MCP 工具；`mcp/client.ts` 在 Zod schema 中额外接受 `input` 别名字段并在运行时重映射到 `url`/`query`/`path` 等真实参数名（历史兼容）。并行调用约束见 `prompts/shared/parallel-rules.txt`。
 
@@ -578,7 +579,7 @@ flowchart TD
     C --> C2[backfillMemoryUserIds<br/>回填老记忆数据的 user_id<br/>通过 conversation_id 关联]
     C2 --> D[seedAdmin: 创建 admin 账号<br/>bcrypt 哈希]
     D --> E[readMcpConfig: .mcp.json]
-    E --> F[initMcpClients: 顺序连接 5 个 MCP<br/>各产生 legacy Tool + LC Tool]
+    E --> F[initMcpClients: 顺序连接 4 个 MCP<br/>各产生 legacy Tool + LC Tool]
     F --> G[registerTools + registerLcTools<br/>合并内置 + MCP]
     G --> G2[initEsClient + warmupEmbedding<br/>+ checkDiskWatermark<br/>失败不阻断, RAG 降级]
     G2 --> H[app.listen :3001]
@@ -724,7 +725,7 @@ flowchart LR
 | MEMORY_DB_PATH | server/data/memory.db | ❌ | 记忆库路径 |
 | MCP_CONFIG_PATH | .mcp.json | ❌ | MCP 配置文件路径 |
 | WORKSPACE_ROOT | server/src/workspace | ❌ | 虚拟文件系统根目录 |
-| LOCAL_FS_CONFIG_PATH | server/config/workspace.json | ❌ | 本地文件系统沙箱配置路径（workspace_mode/sandbox_root 等） |
+| LOCAL_FS_CONFIG_PATH | server/config/workspace.json | ❌ | 本地文件系统沙箱配置路径（workspace_mode/sandbox_root/allowedDirectories 等） |
 | EMBEDDING_AND_RERANK_API_KEY | - | ❌* | 硅基流动 API key（RAG 必需，不配则降级） |
 | EMBEDDING_BASE_URL | https://api.siliconflow.cn/v1 | ❌ | 硅基流动 base_url |
 | EMBED_MODEL | BAAI/bge-m3 | ❌ | embedding 模型（1024 维） |
@@ -763,7 +764,7 @@ flowchart LR
 | fs_mv | JSON `{src, dest, confirm?}` | 仅 local_fs 模式，沙箱 + 高危确认 + 审计：移动/重命名（目标已存在需确认） |
 | fs_stat | JSON `{path}` | 仅 local_fs 模式，沙箱 + 审计：获取文件/目录信息 |
 
-MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search`/`fs_*` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。`fs_*` 工具仅在 `workspace_mode=local_fs` 时生效（否则返回未启用提示），配置在 `server/config/workspace.json`（3s 缓存，无需重启）。
+MCP 工具在服务启动时动态发现并注册，与内置工具并存。`calculator`/`knowledge_search`/`parallel_search`/`fs_*` 以原生 `DynamicStructuredTool` 注册（跳过 adapter 包装），其余内置工具由 `wrapCustomTool` 包装为 `{input: string}` schema。`fs_*` 工具仅在 `workspace_mode=local_fs` 时生效（否则返回未启用提示），配置在 `server/config/workspace.json`（3s 缓存，无需重启）。沙箱权限模型：`allowedDirectories` 是白名单第一关（不在列表一律拒绝），`sandbox_root` 仅作相对路径解析起点与默认生成位置；`allow_absolute_path=true` 时白名单内绝对路径可用。SEARCH 路径工具白名单含 `fs_*`（本地文件查询走该路径）。
 
 ## 设计决策与已知陷阱
 

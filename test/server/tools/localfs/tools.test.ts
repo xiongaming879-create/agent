@@ -51,7 +51,7 @@ describe('fs_read_file', () => {
   })
 
   it('路径逃逸拒绝', async () => {
-    expect(await call(fsReadFileTool, { path: '../escape.txt' })).toMatch(/逃逸/)
+    expect(await call(fsReadFileTool, { path: '../escape.txt' })).toMatch(/白名单/)
   })
 })
 

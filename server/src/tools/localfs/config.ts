@@ -13,6 +13,8 @@ export interface WorkspaceConfig {
   max_read_bytes: number
   auto_confirm_high_risk: boolean
   enable_audit_log: boolean
+  // 额外可达根目录(相对路径仍限主沙箱,绝对路径可落入任一 root)
+  allowedDirectories?: string[]
 }
 
 const DEFAULTS: WorkspaceConfig = {
@@ -24,6 +26,7 @@ const DEFAULTS: WorkspaceConfig = {
   max_read_bytes: 2 * 1024 * 1024,
   auto_confirm_high_risk: false,
   enable_audit_log: true,
+  allowedDirectories: [],
 }
 
 const CACHE_TTL_MS = 3000

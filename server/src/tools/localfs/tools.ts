@@ -51,7 +51,7 @@ async function runFsTool(
   }
 }
 
-const relPath = z.string().describe('相对 sandbox_root 的相对路径,禁止绝对路径')
+const relPath = z.string().describe('相对 sandbox_root 的相对路径,或 allowedDirectories 白名单内的绝对路径')
 
 export const fsReadFileTool = new DynamicStructuredTool({
   name: 'fs_read_file',
@@ -70,7 +70,7 @@ export const fsReadFileTool = new DynamicStructuredTool({
 
 export const fsListDirTool = new DynamicStructuredTool({
   name: 'fs_list_dir',
-  description: '列出本地目录内容(仅 local_fs 模式)。目录名带 / 后缀;recursive=true 递归(深度上限 3,最多 500 项)。',
+  description: '列出本地目录内容(仅 local_fs 模式)。可列出 allowedDirectories 白名单内任意目录(如桌面、项目目录),传绝对路径;目录名带 / 后缀;recursive=true 递归(深度上限 3,最多 500 项)。',
   schema: z.object({ path: relPath, recursive: z.boolean().optional().describe('是否递归列出,默认 false') }),
   func: async ({ path: p, recursive }, _rm, config) =>
     runFsTool('fs_list_dir', p || '.', config, (resolved) => {

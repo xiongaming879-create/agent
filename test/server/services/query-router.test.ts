@@ -129,7 +129,7 @@ describe('filterTools', () => {
     expect(getToolFilter('CHITCHAT')).toEqual([])
     expect(getToolFilter('KNOWLEDGE')).toEqual([])
     expect(getToolFilter('CALCULATION')).toEqual(['calculator'])
-    expect(getToolFilter('SEARCH')).toEqual(['search', 'parallel_search', 'fetch', 'browser_*', 'knowledge_search'])
+    expect(getToolFilter('SEARCH')).toEqual(['search', 'parallel_search', 'fetch', 'browser_*', 'knowledge_search', 'fs_*'])
     expect(getToolFilter('COMPLEX')).toBeNull()
   })
 })

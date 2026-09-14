@@ -39,21 +39,30 @@ function hasSymlinkComponent(root: string, full: string): boolean {
 }
 
 export function resolveSandboxPath(rawPath: string, config: WorkspaceConfig): ResolvedPath {
-  if (!config.sandbox_root) throw new SandboxError('sandbox_root 未配置,本地文件模式不可用', 'NO_ROOT')
   if (typeof rawPath !== 'string' || rawPath.trim() === '') throw new SandboxError('路径不能为空', 'ABSOLUTE')
   const trimmed = rawPath.trim()
 
-  if (path.isAbsolute(trimmed) && !config.allow_absolute_path) {
+  // 白名单第一关:allowedDirectories 不在列表一律拒绝;为空时回落 sandbox_root(向后兼容)
+  const whitelist = (config.allowedDirectories ?? []).filter(Boolean).map((r) => path.resolve(r))
+  if (whitelist.length === 0 && !config.sandbox_root) {
+    throw new SandboxError('sandbox_root 与 allowedDirectories 均未配置,本地文件模式不可用', 'NO_ROOT')
+  }
+  const dirs = whitelist.length > 0 ? whitelist : [path.resolve(config.sandbox_root)]
+
+  const isAbs = path.isAbsolute(trimmed)
+  if (isAbs && !config.allow_absolute_path) {
     throw new SandboxError(`禁止绝对路径: ${trimmed}`, 'ABSOLUTE')
   }
 
-  const root = path.resolve(config.sandbox_root)
-  if (!fs.existsSync(root)) fs.mkdirSync(root, { recursive: true })
+  // sandbox_root 只是工作基准目录:相对路径解析起点 + 默认生成位置,不参与白名单判定
+  const base = path.resolve(config.sandbox_root || dirs[0])
+  if (!fs.existsSync(base)) fs.mkdirSync(base, { recursive: true })
 
-  const full = path.resolve(root, trimmed)
-  if (!isPrefix(root, full)) throw new SandboxError(`路径逃逸被拦截: ${rawPath}`, 'ESCAPE')
+  const full = isAbs ? path.resolve(trimmed) : path.resolve(base, trimmed)
+  const root = dirs.find((r) => isPrefix(r, full))
+  if (!root) throw new SandboxError(`路径不在 allowedDirectories 白名单内: ${rawPath}`, 'ESCAPE')
 
-  // 逻辑前缀校验后逐级查 symlink 组件(覆盖已存在与断链两类逃逸)
+  // 白名单命中后逐级查 symlink 组件(覆盖已存在与断链两类逃逸)
   if (!config.allow_symbolic_link && hasSymlinkComponent(root, full)) {
     throw new SandboxError(`软链接逃逸被拦截: ${rawPath}`, 'SYMLINK')
   }

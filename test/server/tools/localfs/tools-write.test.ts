@@ -104,7 +104,7 @@ describe('fs_cp / fs_mv', () => {
   })
 
   it('cp 逃逸拒绝', async () => {
-    expect(await call(fsCpTool, { src: '../out.txt', dest: 'in.txt' })).toMatch(/逃逸/)
+    expect(await call(fsCpTool, { src: '../out.txt', dest: 'in.txt' })).toMatch(/白名单/)
   })
 
   it('mv 重命名', async () => {

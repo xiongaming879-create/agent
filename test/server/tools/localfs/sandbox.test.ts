@@ -136,4 +136,35 @@ describe('resolveSandboxPath', () => {
     expect(fs.existsSync(missing)).toBe(true)
     expect(r.realPath).toContain('a.txt')
   })
+
+  it('绝对路径落入 allowedDirectories 时放行', () => {
+    const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'extra-'))
+    try {
+      const r = resolveSandboxPath(path.join(extra, 'x.txt'), { ...cfg, allow_absolute_path: true, allowedDirectories: [extra] })
+      expect(r.realPath).toContain('x.txt')
+    } finally {
+      fs.rmSync(extra, { recursive: true, force: true })
+    }
+  })
+
+  it('绝对路径不在任何 root 内被拦截(ESCAPE)', () => {
+    const extra = fs.mkdtempSync(path.join(os.tmpdir(), 'outside3-'))
+    try {
+      expect(() => resolveSandboxPath(path.join(extra, 'x.txt'), { ...cfg, allow_absolute_path: true, allowedDirectories: [root] })).toThrow(SandboxError)
+    } finally {
+      fs.rmSync(extra, { recursive: true, force: true })
+    }
+  })
+
+  it('相对 ../ 落入 allowedDirectories 白名单内时放行(白名单优先于主沙箱边界)', () => {
+    const parent = path.dirname(root)
+    const r = resolveSandboxPath('../x.txt', { ...cfg, allowedDirectories: [parent] })
+    expect(r.realPath).toContain('x.txt')
+  })
+
+  it('sandbox_root 未列入 allowedDirectories 且路径指向其内时,白名单判定放行(嵌套场景)', () => {
+    const inner = path.join(root, 'sub')
+    const r = resolveSandboxPath(path.join(inner, 'a.txt'), { ...cfg, allow_absolute_path: true, allowedDirectories: [root] })
+    expect(r.realPath).toContain('a.txt')
+  })
 })
