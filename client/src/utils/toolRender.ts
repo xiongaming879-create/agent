@@ -106,3 +106,68 @@ export function hostOf(link: string): string {
     return link
   }
 }
+
+export interface FileReadView {
+  path: string | null
+  fileName: string | null
+  content: string
+}
+
+/** 文件读取类工具(本地 fs_read_file 与 MCP read_text_file) */
+const FILE_READ_TOOLS = new Set(['fs_read_file', 'read_text_file'])
+
+/** 目录列举类工具(本地 fs_list_dir 与 MCP list_directory/directory_tree) */
+const DIR_LIST_TOOLS = new Set(['fs_list_dir', 'list_directory', 'directory_tree'])
+
+export function isFileReadTool(name: string): boolean {
+  return FILE_READ_TOOLS.has(name)
+}
+
+export function isDirListTool(name: string): boolean {
+  return DIR_LIST_TOOLS.has(name)
+}
+
+/** 文件读取输出保持纯文本(不渲染 markdown),仅拆出路径供 chip 展示 */
+export function parseFileRead(input: string, output: string): FileReadView | null {
+  if (!output) return null
+  const inputObj = parseInputJson(input)
+  const rawPath = inputObj && typeof inputObj.path === 'string' ? inputObj.path : null
+  const fileName = rawPath ? rawPath.split(/[\\/]/).filter(Boolean).pop() ?? null : null
+  return { path: rawPath, fileName, content: output }
+}
+
+export interface DirListRow {
+  name: string
+  isDir: boolean
+  isSymlink: boolean
+}
+
+/**
+ * 目录列举输出转行条目。兼容两种格式:
+ * fs_list_dir: `src/index.ts` / `dir/` / `x (symlink)`;
+ * MCP list_directory: `[DIR] dir` / `[FILE] file`。
+ * 识别不出结构时返回 null,退回纯文本兜底。
+ */
+export function parseDirList(output: string): DirListRow[] | null {
+  const lines = output.split('\n').map(l => l.trim()).filter(Boolean)
+  if (lines.length === 0) return null
+  const rows: DirListRow[] = []
+  for (const line of lines) {
+    if (line.startsWith('...')) return null
+    const bracket = line.match(/^\[(DIR|FILE)\]\s*(.+)$/)
+    if (bracket) {
+      rows.push({ name: bracket[2].trim(), isDir: bracket[1] === 'DIR', isSymlink: false })
+      continue
+    }
+    const isSymlink = /\(symlink\)$/.test(line)
+    const name = line.replace(/\s*\(symlink\)$/, '')
+    if (name.endsWith('/')) {
+      rows.push({ name: name.slice(0, -1), isDir: true, isSymlink })
+    } else if (!/[\r]/.test(name)) {
+      rows.push({ name, isDir: false, isSymlink })
+    } else {
+      return null
+    }
+  }
+  return rows
+}

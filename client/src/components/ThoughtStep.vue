@@ -4,7 +4,9 @@ import type { ThoughtItem, ThoughtRound } from '../utils/thoughtGroup'
 import {
   parseSearchResults, parseKnowledgeResults, parseParallelSections,
   parseJsonKV, parseInputJson, hostOf,
+  isFileReadTool, isDirListTool, parseFileRead, parseDirList,
 } from '../utils/toolRender'
+import { renderMarkdown } from '../utils/markdown'
 import type { ParallelSection } from '../utils/toolRender'
 
 const props = defineProps<{
@@ -71,13 +73,18 @@ const renders = computed(() => props.items.map((item) => {
     sections = parsed ?? null
   }
 
-  const kv = out && !sections ? parseJsonKV(out) : null
+  const kvInput = inputObj && !KNOWN_TOOLS.has(item.toolName) ? parseJsonKV(item.input) : null
+  const fileRead = out && isFileReadTool(item.toolName) ? parseFileRead(item.input, out) : null
+  const dirRows = out && isDirListTool(item.toolName) ? parseDirList(out) : null
+  const kv = out && !sections && !fileRead && !dirRows ? parseJsonKV(out) : null
   return {
     inputObj,
     queries: inputObj && Array.isArray(inputObj.queries) ? (inputObj.queries as unknown[]).map(String) : null,
-    kvInput: inputObj && !KNOWN_TOOLS.has(item.toolName) ? parseJsonKV(item.input) : null,
+    kvInput,
     sections,
     knowledge: out && item.toolName === 'knowledge_search' ? parseKnowledgeResults(out) : null,
+    fileRead,
+    dirRows,
     kv,
   }
 }))
@@ -91,8 +98,8 @@ function needsExpand(text: string, threshold: number): boolean {
   <div class="space-y-0.5">
     <template v-for="(item, i) in props.items" :key="i">
       <!-- 思考段落 -->
-      <div v-if="item.kind === 'note'" class="text-neutral-400 text-[13px] leading-relaxed break-words py-0.5">
-        {{ item.content }}<svg
+      <div v-if="item.kind === 'note'" class="text-neutral-400 text-[13px] leading-relaxed break-words py-0.5 italic">
+        <div class="markdown-body thought-md" v-html="renderMarkdown(item.content)" /><svg
           v-if="i === props.items.length - 1 && props.isStreaming"
           class="inline-block w-3 h-3 ml-1 align-middle text-neutral-400 animate-spin"
           fill="none" viewBox="0 0 24 24"
@@ -130,7 +137,9 @@ function needsExpand(text: string, threshold: number): boolean {
 
         <div v-if="isDetailOpen(i) && renders[i]" class="ml-2 pl-3 border-l border-neutral-800 mt-1 mb-1.5 space-y-2">
           <!-- 轮内思考 -->
-          <div v-if="item.thought" class="text-neutral-400 italic text-[12px] leading-relaxed break-words">{{ item.thought }}</div>
+          <div v-if="item.thought" class="text-neutral-400 italic text-[12px] leading-relaxed break-words">
+            <div class="markdown-body thought-md" v-html="renderMarkdown(item.thought)" />
+          </div>
 
           <!-- 输入 -->
           <div class="text-[12px]">
@@ -158,8 +167,37 @@ function needsExpand(text: string, threshold: number): boolean {
           <div v-else-if="item.output !== null" class="text-[12px]">
             <span class="text-neutral-500">结果:</span>
 
+            <!-- 文件读取:路径 chip + 纯文本代码块(工具输出不渲染 markdown) -->
+            <div v-if="renders[i]!.fileRead" class="mt-1 space-y-1">
+              <div v-if="renders[i]!.fileRead!.fileName" class="flex items-center gap-2 min-w-0">
+                <span class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-neutral-800 border border-neutral-700 text-neutral-300 text-[11px]">📄 {{ renders[i]!.fileRead!.fileName }}</span>
+                <span class="text-neutral-600 text-[11px] truncate">{{ renders[i]!.fileRead!.path }}</span>
+              </div>
+              <pre class="file-code" :class="!isOpen(`f${i}`) ? 'line-clamp-6' : ''">{{ renders[i]!.fileRead!.content }}</pre>
+              <button
+                v-if="needsExpand(renders[i]!.fileRead!.content, 500)"
+                class="text-white/25 hover:text-white/50 text-[11px]"
+                @click="toggle(`f${i}`)"
+              >{{ isOpen(`f${i}`) ? '收起' : '展开' }}</button>
+            </div>
+
+            <!-- 目录列表:文件树行 -->
+            <div v-else-if="renders[i]!.dirRows" class="mt-1 space-y-0.5">
+              <div :class="!isOpen(`d${i}`) && renders[i]!.dirRows!.length > 8 ? 'line-clamp-8' : ''">
+                <div v-for="(row, ri) in renders[i]!.dirRows" :key="ri" class="flex items-center gap-1.5 font-mono text-[12px] text-neutral-300">
+                  <span class="shrink-0">{{ row.isDir ? '📁' : row.isSymlink ? '🔗' : '📄' }}</span>
+                  <span class="break-all">{{ row.name }}<span v-if="row.isSymlink" class="text-neutral-600"> (symlink)</span></span>
+                </div>
+              </div>
+              <button
+                v-if="renders[i]!.dirRows!.length > 8"
+                class="text-white/25 hover:text-white/50 text-[11px]"
+                @click="toggle(`d${i}`)"
+              >{{ isOpen(`d${i}`) ? '收起' : `展开全部 ${renders[i]!.dirRows!.length} 项` }}</button>
+            </div>
+
             <!-- 搜索卡片(单条 search 或 parallel_search 分段) -->
-            <div v-if="renders[i]!.sections" class="mt-1 space-y-2">
+            <div v-else-if="renders[i]!.sections" class="mt-1 space-y-2">
               <div v-for="(s, si) in renders[i]!.sections" :key="si">
                 <div v-if="renders[i]!.sections!.length > 1" class="text-neutral-300 text-[11px] font-medium mb-1">🔍 {{ s.query }}</div>
                 <div v-if="s.cards" class="space-y-1.5">
@@ -236,6 +274,19 @@ function needsExpand(text: string, threshold: number): boolean {
 </template>
 
 <style scoped>
+.file-code {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: #d4d4d4;
+  background: rgba(23, 23, 23, 0.6);
+  border: 1px solid #262626;
+  border-radius: 6px;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
 .line-clamp-3 {
   display: -webkit-box;
   -webkit-line-clamp: 3;
@@ -253,5 +304,28 @@ function needsExpand(text: string, threshold: number): boolean {
   -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
   overflow: hidden;
+}
+.line-clamp-8 {
+  display: -webkit-box;
+  -webkit-line-clamp: 8;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* 思考过程的 markdown 比正文更紧凑 */
+.thought-md :deep(p) {
+  margin: 0.25em 0;
+}
+.thought-md :deep(p:first-child) {
+  margin-top: 0;
+}
+.thought-md :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.thought-md :deep(h1),
+.thought-md :deep(h2),
+.thought-md :deep(h3),
+.thought-md :deep(h4) {
+  font-size: 1em;
+  font-weight: 600;
 }
 </style>

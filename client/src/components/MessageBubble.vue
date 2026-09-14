@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
-import { Marked } from 'marked'
-import hljs from 'highlight.js'
 import type { Message } from '../types'
 import ThoughtStep from './ThoughtStep.vue'
 import BranchNavigator from './BranchNavigator.vue'
 import { groupThoughtSteps } from '../utils/thoughtGroup'
+import { renderMarkdown } from '../utils/markdown'
 
 const props = defineProps<{
   message: Message
@@ -19,16 +18,6 @@ const emit = defineEmits<{
   switchBranch: [index: number]
   regenerate: []
 }>()
-
-const marked = new Marked({
-  renderer: {
-    code({ text, lang }: { text: string; lang?: string }) {
-      const language = lang && hljs.getLanguage(lang) ? lang : 'plaintext'
-      const highlighted = hljs.highlight(text, { language }).value
-      return `<pre class="hljs-pre"><code class="hljs language-${language}">${highlighted}</code></pre>`
-    },
-  },
-})
 
 const showThoughts = ref(false)
 
@@ -48,7 +37,7 @@ const thoughtItems = computed(() => groupThoughtSteps(props.message.thought_step
 
 const renderedContent = computed(() => {
   if (!props.message.content) return ''
-  return marked.parse(props.message.content) as string
+  return renderMarkdown(props.message.content)
 })
 
 const copied = ref(false)
