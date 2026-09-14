@@ -281,7 +281,7 @@ export async function* langchainAgentRunner(
             const toolInput = callInfo?.args || ''
             pendingToolCalls.delete(msg.tool_call_id)
 
-            yield { type: 'action', tool_name: toolName, content: toolInput }
+            yield { type: 'action', tool_name: toolName, content: toolInput, call_id: msg.tool_call_id }
 
             const output = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content)
             stepCount++
@@ -295,7 +295,7 @@ export async function* langchainAgentRunner(
               durationMs: callInfo ? Date.now() - callInfo.startedAt : 0,
               success,
             })
-            yield { type: 'observation', content: output, duration_ms: callInfo ? Date.now() - callInfo.startedAt : 0, success }
+            yield { type: 'observation', tool_name: toolName, content: output, call_id: msg.tool_call_id, duration_ms: callInfo ? Date.now() - callInfo.startedAt : 0, success }
             observations.push(output)
 
             // 检测连续失败

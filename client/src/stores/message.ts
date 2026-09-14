@@ -127,12 +127,12 @@ export const useMessageStore = defineStore('message', () => {
         break
 
       case 'action':
-        thoughtSteps.push({ type: 'action', content: event.content, tool_name: event.tool_name, timestamp: new Date().toISOString() })
+        thoughtSteps.push({ type: 'action', content: event.content, tool_name: event.tool_name, timestamp: new Date().toISOString(), call_id: event.call_id ?? null })
         msg.thought_steps = [...thoughtSteps]
         break
 
       case 'observation':
-        thoughtSteps.push({ type: 'observation', content: event.content, tool_name: null, timestamp: new Date().toISOString(), duration_ms: event.duration_ms, success: event.success })
+        thoughtSteps.push({ type: 'observation', content: event.content, tool_name: event.tool_name ?? null, timestamp: new Date().toISOString(), call_id: event.call_id ?? null, duration_ms: event.duration_ms, success: event.success })
         msg.thought_steps = [...thoughtSteps]
         break
 
