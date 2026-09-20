@@ -1,611 +1,415 @@
-# 混合架构设计文档：Reactive + Deliberative + Agentic RAG
+# 混合架构设计文档：Reactive 分类路由 + COMPLEX 内部 Plan-and-Execute
 
-> 迁移方案：LangGraph prebuilt `createReactAgent` → 自定义 `StateGraph`
+> 现状基线：5 类分类路由（query-router）→ 各路径 `createReactAgent`
+> 演进目标：COMPLEX 路径内部二级分流，引入 Plan-and-Execute（Planner/Executor/Evaluator/Synthesizer）
+
+---
 
 ## 1. 背景与动机
 
-### 现状
+### 现状（2026-09 实际代码）
 
-当前 Agent 使用 `@langchain/langgraph/prebuilt` 的 `createReactAgent`，本质是一个固定的单循环结构：
-
-```
-LLM → (有tool_calls?) → 执行工具 → LLM → ... → END
-```
-
-这无法支持：
-- **智能路由**：简单问题走快路径，复杂问题走深度推理
-- **多阶段计划**：将复杂问题拆解为有序阶段，逐步执行
-- **提前终止**：某阶段结果已满足目标时跳过剩余阶段
-- **计划调整**：中间结果不理想时重新规划
-- **Agentic RAG**：混合检索 + Rerank + 上下文注入
-
-### 目标
-
-构建自定义 LangGraph StateGraph，实现：
-
-| 能力 | 说明 |
-|------|------|
-| Reactive 路径 | 快速回答 + 简单工具调用，保持现有体验 |
-| Deliberative 路径 | 多阶段深度推理，支持计划/执行/评估/汇总 |
-| 智能路由 | LLM 自动判断走哪条路径 |
-| Agentic RAG | BGE 混合检索 → Rerank 精筛 → 上下文注入 |
-| 安全并发 | 消除模块级可变状态 |
-
----
-
-## 2. 架构总览
-
-```
-                        ┌──────────┐
-                        │  Router  │  LLM 判断 query 复杂度
-                        └────┬─────┘
-                             │
-                 ┌───────────┴───────────┐
-                 ▼                       ▼
-          ┌─────────────┐        ┌──────────────┐
-          │  Reactive   │        │ Deliberative │
-          │  快速路径    │        │  深度路径     │
-          └──────┬──────┘        └──────┬───────┘
-                 │                      │
-                 │               ┌──────▼───────┐
-                 │               │   Planner    │ 拆解为多阶段计划
-                 │               └──────┬───────┘
-                 │                      │
-                 │               ┌──────▼───────┐
-                 │               │   Executor   │ 执行单阶段(推理/RAG/工具/混合)
-                 │               └──────┬───────┘
-                 │                      │
-                 │               ┌──────▼───────┐
-                 │               │  Evaluator   │ 评估结果，决定下一步
-                 │               └──────┬───────┘
-                 │                      │
-                 │          ┌───────────┼───────────┐
-                 │          ▼           ▼           ▼
-                 │    continue      replan      achieved/stuck
-                 │          │           │           │
-                 │          ▼           ▼           ▼
-                 │     Executor    Planner    ┌──────────────┐
-                 │     (下一阶段)  (重新规划)  │ Synthesizer  │
-                 │                          │ 汇总输出报告  │
-                 │                          └──────┬───────┘
-                 │                                 │
-                 ▼                                 ▼
-              END                                END
-```
-
----
-
-## 3. Graph State 设计
-
-所有节点共享以下状态（替代模块级变量和局部变量）：
-
-```typescript
-const AgentStateAnnotation = Annotation.Root({
-  // ===== 核心对话 =====
-  messages: Annotation<BaseMessage[]>({
-    reducer: messagesStateReducer,
-    default: () => [],
-  }),
-  query: Annotation<string>,
-
-  // ===== 路由 =====
-  route: Annotation<'reactive' | 'deliberative'>,
-
-  // ===== Deliberative 路径 =====
-  plan: Annotation<ExecutionPlan | null>,
-  currentStage: Annotation<number>,
-  stageResults: Annotation<StageResult[]>({
-    reducer: (existing, update) => [...existing, ...update],
-    default: () => [],
-  }),
-  evaluationDecision: Annotation<'continue' | 'replan' | 'achieved' | 'stuck'>,
-  replanCount: Annotation<number>,
-
-  // ===== 工具追踪（替代模块级 pendingToolCalls Map） =====
-  pendingToolCalls: Annotation<ToolCallInfo[]>({
-    reducer: (_, update) => update,   // 覆盖而非追加
-    default: () => [],
-  }),
-
-  // ===== RAG =====
-  retrievedDocs: Annotation<RetrievedDoc[]>({
-    reducer: (_, update) => update,
-    default: () => [],
-  }),
-  rerankedDocs: Annotation<RetrievedDoc[]>({
-    reducer: (_, update) => update,
-    default: () => [],
-  }),
-
-  // ===== 卡死检测 =====
-  observations: Annotation<string[]>({
-    reducer: (existing, update) => [...existing, ...update],
-    default: () => [],
-  }),
-
-  // ===== 最终输出 =====
-  finalContent: Annotation<string>,
-})
-```
-
-### 辅助类型
-
-```typescript
-interface ToolCallInfo {
-  id: string
-  name: string
-  args: string
-}
-
-interface ExecutionPlan {
-  stages: Stage[]
-  reasoning: string
-}
-
-interface Stage {
-  index: number
-  goal: string
-  strategy: 'tool' | 'rag' | 'reasoning' | 'hybrid'
-  toolHint?: string       // strategy='tool' 时建议的工具名
-  ragQuery?: string       // strategy='rag'/'hybrid' 时的检索 query
-}
-
-interface StageResult {
-  stageIndex: number
-  goal: string
-  outcome: string
-  confidence: number      // 0-1
-}
-
-interface RetrievedDoc {
-  content: string
-  source: string
-  score: number
-  metadata: Record<string, unknown>
-}
-```
-
----
-
-## 4. 节点详细设计
-
-### 4.1 Router
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.query`, `state.messages` |
-| 输出 | `{ route, query }` |
-| 调用 LLM | 是（非流式，maxTokens: 100） |
-| SSE 事件 | `route` |
-
-**分类逻辑**：
-
-| 走 Reactive | 走 Deliberative |
-|------------|----------------|
-| 闲聊、问候 | 多步分析、对比研究 |
-| 简单事实问答 | 需要文档检索的深度问题 |
-| 单工具任务 | 需要多阶段综合推理 |
-| 翻译、总结单篇 | 需要规划→执行→验证的闭环 |
-
-**安全降级**：LLM 返回无法解析时默认 `reactive`。
-
-**Prompt 要点**：
-- 返回 JSON `{ "route": "reactive" | "deliberative", "reason": "..." }`
-- 包含 few-shot 分类示例
-
----
-
-### 4.2 Reactive Agent
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.messages`, `state.observations` |
-| 输出 | `{ pendingToolCalls, finalContent?, messages }` |
-| 调用 LLM | 是（流式） |
-| SSE 事件 | `thought_delta`, `thought`, `content_delta` |
-
-**行为**：单步 LLM 调用，流式输出思考过程和内容。
-
-- 有 `tool_calls` → 更新 `pendingToolCalls`，思考内容作为 `thought` 输出
-- 无 `tool_calls` 且有文本 → 更新 `finalContent`，文本作为 `content_delta` 输出
-- 卡死检测：`observations` 满足 stuck 模式时强制终止
-
----
-
-### 4.3 Reactive Tool Executor
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.pendingToolCalls` |
-| 输出 | `{ messages: [ToolMessage...], observations, pendingToolCalls: [] }` |
-| 调用 LLM | 否 |
-| SSE 事件 | `action`, `observation` |
-
-**行为**：遍历 `pendingToolCalls`，逐个执行工具，发射 action + observation 事件，清空 `pendingToolCalls`。
-
----
-
-### 4.4 Response Finalizer
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.finalContent` |
-| 输出 | `{}` (无需修改 state) |
-| 调用 LLM | 否 |
-| SSE 事件 | `content_delta`（兜底，处理边缘情况） |
-
-**行为**：确保最终内容已通过流式输出。处理模型只思考未输出内容的边缘情况。
-
----
-
-### 4.5 Planner
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.query`, `state.messages`, `state.stageResults`(replan 时), `state.replanCount` |
-| 输出 | `{ plan, currentStage: 0, stageResults: [] }` |
-| 调用 LLM | 是（非流式，结构化输出） |
-| SSE 事件 | `thought`（计划摘要）, `plan` |
-
-**行为**：
-
-1. 首次规划：分析 query，拆解为 2-5 个阶段
-2. 重新规划：带上前序 stageResults 上下文，调整计划
-3. 返回 `ExecutionPlan` JSON
-
-**Prompt 要点**：
-- 返回 JSON，schema 为 `ExecutionPlan`
-- 每个阶段指定 `goal` + `strategy`(tool/rag/reasoning/hybrid)
-- `tool` strategy 需附带 `toolHint`
-- `rag`/`hybrid` strategy 需附带 `ragQuery`
-
----
-
-### 4.6 Executor
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.plan`, `state.currentStage`, `state.stageResults` |
-| 输出 | `{ stageResults: [result], currentStage: +1, messages, ... }` |
-| 调用 LLM | 是（流式） |
-| SSE 事件 | `stage_start`, `thought_delta`, `content_delta`, `action`, `observation` |
-
-**行为**：根据当前阶段的 `strategy` 执行：
-
-| Strategy | 行为 |
-|----------|------|
-| `reasoning` | 纯 LLM 推理，无工具无 RAG |
-| `tool` | LLM + 指定工具调用（单阶段内最多 3 轮 mini-ReAct） |
-| `rag` | 调用 RAG 检索 → 将检索结果注入 LLM 上下文 → 生成 |
-| `hybrid` | 先 RAG 检索，再 LLM + 工具调用 |
-
-**RAG 不可用时**：`rag`/`hybrid` 降级为 `reasoning`。
-
----
-
-### 4.7 Evaluator
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.query`, `state.plan`, `state.stageResults` |
-| 输出 | `{ evaluationDecision, replanCount? }` |
-| 调用 LLM | 是（非流式，结构化输出） |
-| SSE 事件 | `evaluation`, `stage_result` |
-
-**决策逻辑**：
-
-| 决策 | 条件 | 下一步 |
-|------|------|--------|
-| `achieved` | 所有目标已满足 | → Synthesizer（跳过剩余阶段） |
-| `continue` | 部分完成，需继续 | → Executor（下一阶段） |
-| `replan` | 当前方案失败 | → Planner（重新规划） |
-| `stuck` | 无法继续 | → Synthesizer（尽力回答） |
-
-**防护**：`replanCount >= 2` 时强制 `stuck`。
-
-**Prompt 要点**：
-- 输入：原始 query + 计划 + 当前阶段结果 + 所有历史阶段结果
-- 返回 JSON `{ "decision": "...", "reason": "...", "confidence": 0.8 }`
-
----
-
-### 4.8 Synthesizer
-
-| 属性 | 值 |
-|------|-----|
-| 输入 | `state.query`, `state.stageResults` |
-| 输出 | `{ finalContent, messages }` |
-| 调用 LLM | 是（流式） |
-| SSE 事件 | `content_delta` |
-
-**行为**：将所有阶段结果汇总为连贯的最终报告。流式输出。
-
-**Prompt 要点**：
-- 输入：原始 query + 所有 stageResults（goal + outcome）
-- 输出格式：结构化报告或自然语言回答
-- 如果 `evaluationDecision === 'stuck'`，说明已尽力但未完全解决
-
----
-
-## 5. 边与条件路由
-
-### 完整拓扑
-
-```
-START
-  → router
-    → [route === 'reactive']     → reactiveAgent
-    → [route === 'deliberative'] → planner
-
-reactiveAgent
-  → [pendingToolCalls.length > 0] → reactiveToolExecutor → reactiveAgent (循环)
-  → [无 tool_calls, 有内容]       → responseFinalizer → END
-
-planner → executor → evaluator
-  → [decision === 'continue']  → executor
-  → [decision === 'replan']    → planner
-  → [decision === 'achieved']  → synthesizer → END
-  → [decision === 'stuck']     → synthesizer → END
-```
-
-### 无限循环防护
-
-| 机制 | 阈值 | 说明 |
-|------|------|------|
-| 最大计划阶段数 | 5 | Planner 最多生成 5 个阶段 |
-| 最大 replan 次数 | 2 | 超过强制 stuck |
-| 单阶段内工具调用轮次 | 3 | Executor 内部 mini-ReAct 上限 |
-| Graph recursionLimit | 25 | LangGraph 全局递归上限 |
-
----
-
-## 6. Agentic RAG 设计
-
-### 检索流水线
+当前 Agent 采用 **分类路由 + ReAct 单循环** 结构：
 
 ```
 用户 query
     │
     ▼
-┌─────────────────────────────┐
-│   Hybrid Retrieve (粗筛)     │
-│   ├─ BGE 关键词检索          │
-│   └─ 向量相似度检索           │
-│   → 合并去重 → Top-K (≈10)  │
-└─────────────┬───────────────┘
-              │
-              ▼
-┌─────────────────────────────┐
-│   Rerank (精排)              │
-│   Cross-encoder 模型评分     │
-│   → Top-N (≈4)              │
-└─────────────┬───────────────┘
-              │
-              ▼
-┌─────────────────────────────┐
-│   Context Assembly           │
-│   格式化为上下文字符串         │
-│   注入 LLM prompt            │
-└─────────────────────────────┘
+┌──────────────┐  classifyQuery(): 规则正则优先 + LLM 兜底 + complexity 覆盖
+│ query-router │  输出 QueryCategory: CHITCHAT | KNOWLEDGE | CALCULATION | SEARCH | COMPLEX
+└──────┬───────┘
+       │
+       ▼ 按类别分发（runRoutedAgent）
+┌────────┬─────────┬──────────┬────────┬──────────┐
+│CHITCHAT│KNOWLEDGE│CALCULATION│ SEARCH │ COMPLEX  │
+│ 闲聊   │ 内置知识 │ 计算器    │ 联网搜索│ 强模型+全工具│
+│轻模型  │ 轻模型   │ 轻模型    │ 轻模型  │ 强模型    │
+│无工具  │ 无工具   │ 1个工具   │ 搜索工具│ 全部工具  │
+└────────┴─────────┴──────────┴────────┴──────────┘
+        每条路径内部 = createReactAgent (ReAct 循环) + langchainAgentRunner
 ```
 
-### 技术选型
+关键事实：
+- **路由层**：`server/src/services/query-router.ts` 实现 5 类分发，`classifyByRules`（正则）优先、`classifyByLLM` 兜底、`complexity` 参数（fast/medium/deep）覆盖分类。
+- **执行层**：`server/src/services/langchain-adapter.ts` 的 `langchainAgentRunner` 消费 `createReactAgent` 的 stream，负责 SSE 事件发射、卡死检测、搜索停止检测、结果综合。
+- **工具层**：内置工具 + MCP 动态注册，按类别白名单过滤（`filterTools`）；高危文件操作有对话内确认机制。
+- **RAG**：ElasticSearch（`es-client.ts`，`rag_index` 索引 + `dense_vector` 1024 维 + IK 分词）+ `knowledge_search` 工具，ES 未启动时降级。
+- **上下文记忆**：`memory-extractor` / `memory-promoter` / `memory-recall` 三段式。
 
-| 组件 | 选型 | 理由 |
-|------|------|------|
-| 向量数据库 | ChromaDB | 本地零配置，LangChain 原生，支持混合检索 |
-| Embedding | OpenAI 兼容 API 代理 → BGE-m3 | 项目已有代理模式，后续可切本地 |
-| Rerank | 初期 LLM 评分 → 后续 cross-encoder | 渐进式，初期无需额外模型服务 |
-| 文档分块 | RecursiveCharacterTextSplitter | LangChain 内置，支持中文分隔符 |
+### 问题：COMPLEX 路径的能力上限
 
-### 文档摄入流程
+COMPLEX 是深度兜底路径（强模型 + 全工具 + ReAct），但对**真正的多步问题**（多条件对比分析、多阶段方案制定、需要"规划→执行→验证"闭环的任务），纯 ReAct 单循环存在固有弱点：
 
-```
-上传文件 (PDF/MD/TXT)
-    │
-    ▼
-解析内容
-    │
-    ▼
-RecursiveCharacterTextSplitter
-  chunkSize: 1000, chunkOverlap: 200
-  separators: ['\n\n', '\n', '。', '.', ' ', '']
-    │
-    ▼
-BGE-m3 Embedding
-    │
-    ▼
-ChromaDB 存储
-    │
-    ▼
-SQLite 记录元数据
-```
+| 弱点 | 表现 |
+|------|------|
+| 无全局计划 | 每步临时决策，容易在工具调用中"打转"，忘记最初目标 |
+| 上下文膨胀 | 多步推理的历史全部堆积在上下文中，token 消耗高 |
+| 不可提前终止 | 无法在"信息已足够"时显式跳过剩余推理 |
+| 计划不可调整 | 发现方向错了只能靠 agent 自己"感觉"回头，无显式 replan 机制 |
 
-### RAG API 端点
+### 目标
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/documents/upload` | 上传文档（multipart/form-data） |
-| GET | `/api/documents` | 列出已摄入文档 |
-| DELETE | `/api/documents/:id` | 删除文档及其向量 |
-| POST | `/api/documents/query` | 测试 RAG 检索（调试用） |
+在不改动路由层的前提下，**升级 COMPLEX 路径内部实现**，实现"二级分流"：
 
-### 新增数据库表
-
-```sql
-CREATE TABLE IF NOT EXISTS documents (
-  id TEXT PRIMARY KEY,
-  filename TEXT NOT NULL,
-  content_type TEXT NOT NULL,
-  chunk_count INTEGER NOT NULL,
-  created_at TEXT NOT NULL
-);
-```
+| 能力 | 说明 |
+|------|------|
+| COMPLEX 二级分流 | 轻量判断 → 简单复杂走 ReAct（现状），真正多步走 Plan-and-Execute |
+| Plan-and-Execute | Planner 拆解 → Executor 分阶段执行（支持并行/串行）→ Evaluator 质量闸门 → Synthesizer 汇总 |
+| 提前终止 | Evaluator 判定 achieved 时跳过剩余阶段，省 token |
+| 计划调整 | Evaluator 判定 replan 时回 Planner 重新规划（上限 2 次） |
+| 保持兼容 | 路由层、SSE 事件、前端零改动可上线 |
 
 ---
 
-## 7. SSE 事件扩展
+## 2. 架构总览（演进后）
 
-现有 `AgentEvent` 必须保留（向后兼容），新增以下变体：
+```
+用户 query
+    │
+    ▼
+┌──────────────┐
+│ query-router │  5 类分发（不变）
+└──────┬───────┘
+       │ COMPLEX
+       ▼
+┌───────────────────────────────────────────────┐
+│ runComplex：二级分流                           │
+│                                               │
+│  ┌──────────────────┐  简单复杂   ┌─────────┐ │
+│  │ 轻量判断(规则/LLM) ├──────────► │ ReAct   │ │  ← 现状路径，改动为零
+│  │ query 长度>阈值    │            │ 单循环   │ │
+│  │ 含"对比/分析/方案" │            └─────────┘ │
+│  │ complexity=deep   │  真正多步               │
+│  └────────┬─────────┴──────────┐              │
+│           ▼                   ▼              │
+│  ┌─────────────────────────────────────────┐ │
+│  │ Plan-and-Execute（新增）                 │ │
+│  │                                         │ │
+│  │  Planner ──► Executor(并行/串行批次)      │ │
+│  │    ▲            │                       │ │
+│  │    │replan      ▼                       │ │
+│  │    └──── Evaluator ──► achieved/stuck    │ │
+│  │                     └─► Synthesizer      │ │
+│  └─────────────────────────────────────────┘ │
+└───────────────────────────────────────────────┘
+```
+
+设计原则：
+- **路由层不动**。COMPLEX 仍是"强模型 + 全工具"，二级分流是 COMPLEX 的**内部实现策略**，不新增第 6 条路由（避免与 COMPLEX 职责重叠、避免分类边界模糊）。
+- **复用现成组件**：`callLLM`/`streamLLM`（llm-caller.ts）、工具注册表（tools/index.ts）、`buildMemoryContext`、`knowledge_search`。
+- **渐进式**：PnE 作为独立模块先行，验证后切换默认。
+
+---
+
+## 3. 二级分流设计（COMPLEX 内部）
+
+### 3.1 轻量判断层
+
+在 `runComplex` 入口增加判断，决定走 ReAct 还是 PnE：
+
+| 判据 | 规则 | 说明 |
+|------|------|------|
+| `complexity` 参数 | `deep` → PnE；`medium`/`fast` → 走其余判据 | 前端可显式指定深度模式 |
+| query 长度 | 长度 > 120 字符 → PnE | 长问题倾向多步骤 |
+| 规划信号词 | 含「对比/分析/方案/规划/步骤/制定/策划/评估」→ PnE | 与 classifyByRules 的 COMPLEX 词表对齐 |
+| LLM 快速分类 | 上述未命中时，用 MODEL_LIGHT 20 token 问一次「该问题是否需要多阶段执行」 | 兜底，避免漏判 |
+
+**安全降级**：PnE 任意环节出错 → 回退 ReAct（现状路径）重试一次，保证体验不劣化。
+
+### 3.2 Plan-and-Execute 模块（新增 `server/src/services/pne/`）
+
+与文档早期"迁移到 StateGraph"的方案不同，PnE 采用**生成器函数编排**（复用现有 SSE 管道），不引入图运行时：
+
+```
+server/src/services/pne/
+├── planner.ts        # Planner：query → ExecutionPlan JSON
+├── executor.ts       # Executor：执行单阶段（工具调用 / 纯推理）+ 拓扑调度（并行/串行）
+├── evaluator.ts      # Evaluator：阶段结果 → continue/achieved/replan/stuck
+├── synthesizer.ts    # Synthesizer：阶段结果 → 最终答案
+└── prompts.ts        # 4 类 prompt 模板
+```
+
+**编排逻辑**（`runPneAgent`，AsyncGenerator\<AgentEvent\>）：
+
+```
+while replanCount <= MAX_REPLAN:
+    plan = await planner(query, stageResults)          # 首次/重规划
+    while True:
+        ready = findReadyStages(plan.stages, stageResults)  # 拓扑调度
+        if not ready: break                            # 全完成 / 依赖死锁
+        results = await runBatchParallel(ready)        # 无依赖阶段并发
+        stageResults += results
+        decision = await evaluator(query, plan, stageResults)
+        if decision == 'achieved' or 'stuck': return   # 提前终止
+        if decision == 'replan': break                 # 回外层重新规划
+    # 全部阶段执行完后做最终评估
+return synthesizer(query, stageResults)
+```
+
+### 3.3 数据模型
+
+```typescript
+interface ExecutionPlan {
+  reasoning: string
+  stages: Stage[]
+}
+
+interface Stage {
+  index: number
+  goal: string
+  strategy: 'tool' | 'reasoning' | 'hybrid'
+  toolHint?: string       // strategy='tool'/'hybrid' 时建议的工具名
+  toolArgs?: string       // 工具参数（对象参数用 JSON 字符串）
+  dependsOn: number[]     // 依赖的阶段 index 列表；[] = 无依赖（可并行）
+}
+
+interface StageResult {
+  index: number
+  goal: string
+  outcome: string
+}
+```
+
+### 3.4 并行/串行调度（依赖拓扑）
+
+- **无依赖阶段（`dependsOn: []`）→ 同一批并行执行**（`Promise.all` / 线程池，IO 密集型 LLM 调用）。
+- **有依赖阶段 → 等待依赖完成后串行**。
+- 每轮选取"依赖已全部完成"的 stage 作为 ready 批次，天然保证并行只发生在无依赖之间。
+- **死锁防护**：若剩余阶段都存在未满足依赖，立即跳出，交由最终评估兜底。
+
+> ⚠️ **前置条件**：并行前必须消除 `langchain-adapter.ts` 的模块级 `pendingToolCalls` Map（见 §7 风险表）。并行阶段并发写共享 Map 会造成请求间串扰。
+
+---
+
+## 4. 无限循环防护
+
+| 机制 | 阈值 | 说明 |
+|------|------|------|
+| 最大计划阶段数 | 5 | Planner 最多生成 5 个阶段 |
+| 最大 replan 次数 | 2 | 超过强制 stuck → Synthesizer 兜底 |
+| 单阶段内工具调用轮次 | 3 | Executor 内部 mini-ReAct 上限 |
+| 单阶段超时 | 60s | 复用 llm-caller 的 LLM_TIMEOUT_MS |
+| 依赖死锁检测 | — | 无 ready 阶段即跳出 |
+
+---
+
+## 5. SSE 事件扩展
+
+现有 `AgentEvent`（`server/src/types.ts`）必须保留（向后兼容，前端 switch-case 静默忽略未知类型），新增以下变体：
 
 ```typescript
 export type AgentEvent =
   // ===== 现有（不可修改） =====
   | { type: 'thought'; content: string }
   | { type: 'thought_delta'; content: string }
-  | { type: 'action'; tool_name: string; content: string }
-  | { type: 'observation'; content: string }
+  | { type: 'action'; tool_name: string; content: string; call_id?: string }
+  | { type: 'observation'; tool_name?: string; content: string; call_id?: string; duration_ms?: number; success?: boolean }
   | { type: 'content'; content: string }
   | { type: 'content_delta'; content: string }
+  | { type: 'warning'; content: string }
   | { type: 'done' }
 
-  // ===== 新增：路由 =====
-  | { type: 'route'; decision: 'reactive' | 'deliberative'; reason: string }
-
-  // ===== 新增：Deliberative 路径 =====
-  | { type: 'plan'; stages: { index: number; goal: string; strategy: string }[] }
+  // ===== 新增：PnE 路径 =====
+  // plan: 计划快照事件。每次阶段状态变化（start/完成/提前终止 skip）时
+  // 重发一次完整快照，前端据此渲染 todo list 的实时完成情况。
+  | { type: 'plan'; stages: { index: number; goal: string; strategy: string; status: 'pending' | 'running' | 'done' | 'skipped'; dependsOn: number[] }[] }
   | { type: 'stage_start'; index: number; goal: string; strategy: string }
-  | { type: 'stage_result'; index: number; outcome: string; confidence: number }
+  | { type: 'stage_result'; index: number; outcome: string }
   | { type: 'evaluation'; decision: string; reason: string }
 ```
 
-**前端兼容性**：现有 `handleSSEEvent` 使用 switch-case，未匹配的事件类型会被静默忽略，无需前端改动即可运行。后续可选增加计划可视化面板。
+**前端兼容性**：现有 `handleSSEEvent` 使用 switch-case，未匹配的事件类型被静默忽略，新事件可随时上线。`plan` 事件的 todo 可视化设计见 §5.1。
+
+### 5.1 PnE 计划可视化（todo list 完成情况）
+
+**需求**：PnE 路由执行时，在聊天页面的"思考过程"区域实时展示计划 todo list 及每个阶段的完成状态。
+
+**方案（A）**：计划快照作为特殊 `thought_step` 存储与渲染，不改 Message 顶层结构、不做数据库迁移。
+
+**渲染效果示意**（嵌入现有思考过程区，黑白主题）：
+
+```
+┌─ 执行计划 ─────────────────────┐
+│ ☑ 1. 查天气            ✓ 晴 31°C │
+│ ☑ 2. 查汇率            ✓ 0.14    │
+│ ⏳ 3. 规划行程   (依赖 1,2)      │
+│ ○ 4. 汇总预算   (依赖 3)         │
+└────────────────────────────────┘
+```
+
+**数据流（三处改动，全部向后兼容）**：
+
+```
+后端 runPneAgent
+  │ 每次阶段状态变化 → 发 plan 事件（完整快照，status 已更新）
+  ▼
+server/routes/message.ts  processAgentStream
+  │ case 'plan'：透传到前端 + 写入 thoughtSteps（type:'plan'）持久化
+  ▼  SSE
+client/stores/message.ts  handleSSEEvent
+  │ case 'plan'：写入 thoughtSteps（type:'plan'）
+  ▼
+client/utils/thoughtGroup.ts  groupThoughtSteps
+  │ type==='plan' → ThoughtItem { kind: 'plan', stages }
+  ▼
+client/components/ThoughtStep.vue
+  │ 新增 v-if="item.kind === 'plan'" 分支 → 渲染 todo list
+```
+
+**各文件改动点**：
+
+| 文件 | 改动 |
+|------|------|
+| `server/src/types.ts` | `AgentEvent` 增加 `plan` 变体；`ThoughtStep.type` 联合类型增加 `'plan'` |
+| `server/src/routes/message.ts` | `processAgentStream` 增加 `case 'plan'`：透传 SSE + 写入服务端 `thoughtSteps`（随 `createMessage` 持久化） |
+| `client/src/types/index.ts` | 同步 `AgentEvent` 与 `ThoughtStep` 类型 |
+| `client/src/stores/message.ts` | `handleSSEEvent` 增加 `case 'plan'`：写入 `thoughtSteps` |
+| `client/src/utils/thoughtGroup.ts` | `groupThoughtSteps` 识别 `type==='plan'`，产出 `kind:'plan'` 条目（携带 stages 快照） |
+| `client/src/components/ThoughtStep.vue` | 新增 `kind==='plan'` 模板分支：todo list（阶段名 + 状态图标 + 依赖标注） |
+
+**选择方案 A 的理由**：
+
+| 对比 | 方案 A：存 thought_steps（✅ 选定） | 方案 B：Message 顶层加 plan_steps |
+|------|----------------------------------|---------------------------------|
+| 改动面 | 前后端各加一个 case，无接口变更 | 动 Message 接口 + 数据库迁移 + 序列化 |
+| 历史回放 | `thought_steps` 已持久化，刷新后可回放 todo 完成过程 | 需新增持久化字段 |
+| 语义 | plan 作为"思考过程的一种"，与 note/round 平级 | 更"正经"但成本高 |
+
+**关键设计点**：
+- `plan` 事件发**完整快照**而非增量（每次重发全部 stages + 最新 status），前端覆盖渲染即可，天然容错丢包。
+- `status` 四态：`pending`（未开始）/ `running`（执行中）/ `done`（完成）/ `skipped`（提前终止被跳过）。
+- 老数据/非 PnE 路由无 `plan` 步骤，`groupThoughtSteps` 和模板分支均不影响现有 note/round 渲染。
 
 ---
 
-## 8. 文件变更清单
+## 6. RAG（现状说明）
 
-### 新增文件
+> 早期设计文档规划使用 ChromaDB + BGE-m3，**实际已落地方案为 ElasticSearch**，本文档以代码为准。
+
+### 检索流水线（已实现）
 
 ```
-server/src/services/graph/
-├── state.ts                        # AgentState Annotation + 辅助类型
-├── graph.ts                        # buildGraph() 组装节点和边
-├── prompts.ts                      # 所有 LLM prompt 模板
-├── stuck-detector.ts               # detectStuckPattern（去重合并）
-└── nodes/
-    ├── router.ts                   # 智能路由节点
-    ├── reactive-agent.ts           # Reactive LLM 调用
-    ├── reactive-tool-executor.ts   # Reactive 工具执行
-    ├── response-finalizer.ts       # 响应兜底
-    ├── planner.ts                  # 计划拆解
-    ├── executor.ts                 # 阶段执行
-    ├── evaluator.ts                # 结果评估
-    └── synthesizer.ts              # 结果汇总
-
-server/src/services/rag/
-├── index.ts                        # barrel export
-├── embeddings.ts                   # BGE-m3 embedding 服务
-├── vector-store.ts                 # ChromaDB 封装
-├── reranker.ts                     # Rerank 模型封装
-├── ingestion.ts                    # 文档摄入流水线
-└── retrieval.ts                    # 混合检索 + Rerank
-
-server/src/routes/documents.ts      # 文档上传/管理 API
+用户 query
+    │
+    ▼
+┌─────────────────────────────┐
+│  rag-search：混合检索         │
+│  ├─ IK 分词关键词检索         │
+│  └─ dense_vector 向量检索     │
+│  → 合并去重 → Top-K          │
+└─────────────┬───────────────┘
+              │
+              ▼
+┌─────────────────────────────┐
+│  knowledge_search 工具        │
+│  检索结果注入 LLM 上下文        │
+└─────────────┬───────────────┘
+              │
+              ▼
+         LLM 生成回答
 ```
 
-### 重写文件
+### 技术选型（已落地）
 
-| 文件 | 原因 |
-|------|------|
-| `server/src/services/agent.ts` | 从 `createReactAgent` 调用改为自定义 graph 调用；移除 legacy 模式、`USE_LANGCHAIN` 开关 |
-| `server/src/services/langchain-adapter.ts` | 从消费 `createReactAgent` stream 改为消费 `writer()` 事件；移除模块级 `pendingToolCalls` Map |
+| 组件 | 选型 | 说明 |
+|------|------|------|
+| 检索引擎 | ElasticSearch（`es-client.ts`） | `rag_index` 索引：1 分片 0 副本，`dense_vector` 1024 维 cosine，IK 分词 |
+| Embedding | `embedding-client.ts` | 1024 维向量，warmup 启动预热 |
+| 分块 | `rag-chunker.ts` | 文档摄入分块 |
+| 摄入 | `rag-indexer.ts` + `document-extractor.ts` | 上传 → 解析 → 分块 → 向量化 → 入库 |
+| 元数据 | 索引内字段化 | file_name / user_id / doc_id / chunk_index / uploaded_at 等 |
+| 降级 | ES 未启动 | knowledge_search 降级，其余功能正常 |
+
+---
+
+## 7. 文件变更清单
+
+### 新增文件（PnE 模块）
+
+```
+server/src/services/pne/
+├── planner.ts
+├── executor.ts
+├── evaluator.ts
+├── synthesizer.ts
+└── prompts.ts
+```
 
 ### 修改文件
 
 | 文件 | 变更 |
 |------|------|
-| `server/src/types.ts` | 新增 AgentEvent 变体，移除 `Tool` interface |
-| `server/src/tools/index.ts` | 统一为 `DynamicStructuredTool[]`，移除 legacy `tools[]` 数组 |
-| `server/src/mcp/client.ts` | 只生成 `DynamicStructuredTool[]`，移除 legacy `Tool[]` 生成 |
-| `server/src/routes/message.ts` | 适配新 `runAgent()` 签名，可选 `mode` 参数 |
-| `server/src/index.ts` | 新增 ChromaDB 初始化步骤 |
-| `server/src/db/migrations.ts` | 新增 documents 表迁移 |
-| `client/src/types/index.ts` | 同步新增 AgentEvent 变体 |
-| `client/src/stores/message.ts` | 处理新事件类型（pass-through） |
+| `server/src/services/query-router.ts` | `runComplex` 入口加二级分流判断；新增 `runPneAgent` 分发 |
+| `server/src/services/agent.ts` | 无需改动（入口已透传） |
+| `server/src/types.ts` | 新增 plan/stage_start/stage_result/evaluation 事件变体（plan 含 status 字段） |
+| `server/src/routes/message.ts` | `processAgentStream` 增加 `case 'plan'`：透传 SSE + 写入 thoughtSteps 持久化（todo 可视化，见 §5.1） |
+| `server/src/services/langchain-adapter.ts` | **消除模块级 `pendingToolCalls` Map**（改为调用上下文传入 / 局部收集），PnE 并行前置条件 |
+| `client/src/types/index.ts` | 同步新增 AgentEvent 变体（含 plan 的 status 字段） |
+| `client/src/stores/message.ts` | `handleSSEEvent` 增加 `case 'plan'`：写入 thoughtSteps（todo 可视化，见 §5.1） |
+| `client/src/utils/thoughtGroup.ts` | `groupThoughtSteps` 识别 `type==='plan'` → `kind:'plan'` 条目（todo 可视化，见 §5.1） |
+| `client/src/components/ThoughtStep.vue` | 新增 `kind==='plan'` 模板分支：渲染计划 todo list（todo 可视化，见 §5.1） |
 
-### 删除文件
+### 已知遗留（本期不处理）
 
-| 文件 | 原因 |
+| 文件 | 说明 |
 |------|------|
-| `server/src/services/tool-adapter.ts` | 工具统一为 `DynamicStructuredTool`，不再需要包装层 |
+| `server/src/services/tool-adapter.ts` | 仍作为内置工具 → `DynamicStructuredTool[]` 的包装层存在，保留 |
+| `server/src/types.ts` 的 `Tool` interface | 历史兼容接口，仍被 tools/index.ts 使用，保留 |
 
 ---
 
-## 9. 分阶段实施计划
+## 8. 分阶段实施计划
 
-### Phase 1：自定义 StateGraph 替换 createReactAgent（仅 Reactive）
+### Phase 1：PnE 独立模块（不改路由）
 
-**目标**：行为与现有系统完全一致，底层迁移到自定义 graph。
+**目标**：PnE 可作为独立能力调用，行为与 demo 验证一致。
 
 **产出**：
-- 新增 `graph/` 目录下所有 Reactive 节点
-- 重写 `agent.ts` 和 `langchain-adapter.ts`
-- 统一工具格式，移除 legacy 模式和 `USE_LANGCHAIN` 开关
-- 移除模块级 `pendingToolCalls` Map
+- `pne/` 目录 5 个文件
+- 拓扑调度（并行/串行）+ 4 层防护
+- SSE 新事件定义
 
-**验证**：启动前后端，简单问答 + 工具调用 + 卡死检测 + 并发请求均正常。
+**验证**：单元测试 + 手动调用 `runPneAgent("对比 A 和 B...")`，观察 plan/stage_start/stage_result/evaluation 事件序列。
 
----
+### Phase 2：COMPLEX 二级分流接入
 
-### Phase 2：Router 节点
-
-**目标**：LLM 智能分类 query。
+**目标**：COMPLEX 内部按判据分流，PnE 出错回退 ReAct。
 
 **产出**：
-- `router.ts` 节点
-- `prompts.ts` 路由 prompt
-- 新增 `route` SSE 事件
-- Deliberative 路径暂时为 stub（fallback 到 reactive）
+- `runComplex` 轻量判断层
+- 回退逻辑（PnE 异常 → ReAct 重试一次）
 
-**验证**：简单问候路由到 reactive，复杂分析路由到 deliberative（stub fallback）。
+**验证**：分别用简单/复杂 query 验证走对路径；PnE 路径人为注入错误验证回退。
 
----
+### Phase 3：消除 pendingToolCalls 串扰 + 并行加固
 
-### Phase 3：Deliberative 路径
-
-**目标**：完整实现 Planner → Executor → Evaluator → Synthesizer。
+**目标**：PnE 并行阶段无共享状态污染。
 
 **产出**：
-- 4 个新节点文件
-- 完整图拓扑（条件边）
-- 新增 `plan`/`stage_start`/`stage_result`/`evaluation` SSE 事件
+- `pendingToolCalls` 从模块级 Map 改为调用级局部收集
+- 并发请求压力测试
 
-**验证**：
-- 多阶段问题正确拆解和执行
-- Evaluator 提前终止功能
-- Replan 上限（2 次）后强制 stuck
-- 所有新 SSE 事件正确发射
+**验证**：并发 5 请求，工具调用结果互不串扰。
 
----
+### Phase 4：前端计划可视化（设计已完成，见 §5.1）
 
-### Phase 4：Agentic RAG
-
-**目标**：集成混合检索 + Rerank。
+**目标**：plan/stage 事件渲染为 todo list（思考过程区内嵌）。
 
 **产出**：
-- `rag/` 目录下 5 个模块
-- 文档上传 API
-- documents 表迁移
-- Executor RAG 集成
-- ChromaDB 初始化
+- `handleSSEEvent` / `groupThoughtSteps` / `ThoughtStep.vue` 三处改动（§5.1 文件表）
 
-**验证**：
-- 文档上传 → 分块 → 入库
-- 相关问题正确走 RAG strategy
-- 检索结果出现在 observation
-- ChromaDB 不可用时降级为 reasoning
+**验证**：PnE 路由发起多阶段问题，页面上实时看到计划 todo list 与各阶段完成状态；刷新后历史回放正常。
 
 ---
 
-## 10. 风险与缓解
+## 9. 风险与缓解
 
 | 风险 | 缓解措施 |
 |------|---------|
-| Router 分类不准导致体验差 | 默认 reactive，只有高置信度才走 deliberative |
-| Deliberative 循环不终止 | 4 层防护：5 阶段上限、2 次 replan 上限、3 轮单阶段上限、25 recursionLimit |
-| RAG 检索质量差 | Rerank 精排 + 不可用时降级为 reasoning |
-| ChromaDB 连接失败 | 降级策略：RAG 不可用时 executor 自动切换 reasoning |
+| 二级分流误判：简单问题被丢进 PnE | 规则优先 + LLM 兜底；PnE 出错回退 ReAct |
+| PnE 循环不终止 | 4 层防护：5 阶段上限、2 次 replan 上限、单阶段 3 轮工具上限、依赖死锁检测 |
+| PnE 每批 Evaluator 增加 LLM 调用成本 | 仅 `deep`/多步问题走 PnE；Evaluator 用 MODEL_LIGHT + 300 token |
+| 并行阶段共享状态串扰 | Phase 3 消除模块级 `pendingToolCalls` Map |
 | 前端 SSE 不兼容 | 新事件类型向后兼容，前端静默忽略未知类型 |
-| `writer()` API 变更风险 | Phase 1 充分测试后再推进后续 Phase |
-| 并发请求 pendingToolCalls 串扰 | 已迁移到 graph state，每次请求隔离 |
+| RAG 检索质量差 / ES 未启动 | knowledge_search 降级为 reasoning，其余功能正常 |
+| 双执行范式维护成本 | PnE 与 ReAct 共用工具层、SSE 管道、防护组件，差异仅在编排层 |
