@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-基于 ReAct (Reasoning + Acting) 模式的 AI Agent 聊天应用，Vue 3 前端 + Node.js/Express 后端。核心能力：**查询分类路由**（5 路径分流 + 多模型调度）、LangGraph ReAct 循环（原生 tool-calling）、长期记忆、RAG 知识库检索、MCP 动态工具、思考过程可视化、消息分支、用户认证与多租户隔离、流式打字机输出。
+基于 ReAct (Reasoning + Acting) 模式的 AI Agent 聊天应用，Vue 3 前端 + Node.js/Express 后端。核心能力：**查询分类路由**（5 路径分流 + 多模型调度）、**PnE (Plan-and-Execute)**（复杂查询先规划后执行，见下文）、LangGraph ReAct 循环（原生 tool-calling）、长期记忆、RAG 知识库检索、MCP 动态工具、思考过程可视化、消息分支、用户认证与多租户隔离、流式打字机输出。
 
 ## 技术栈
 
@@ -122,6 +122,14 @@ agent/
 │       │   ├── langchain-adapter.ts  # LangGraph stream → AgentEvent + 停止检测
 │       │   ├── llm-caller.ts    # streamLLM / callLLM 通用调用
 │       │   ├── llm-config.ts    # 模型/API 共享配置（避免循环依赖）
+│       │   ├── pne/             # PnE (Plan-and-Execute) 二级分流管线
+│       │   │   ├── gate.ts      # shouldUsePne: deep强制/长度>120/信号词/LLM兜底
+│       │   │   ├── planner.ts   # MODEL_STRONG 拆解 JSON 计划 (callLLM + parsePlan)
+│       │   │   ├── executor.ts  # ChatOpenAI.bindTools 手写 mini 循环 (3 轮上限)
+│       │   │   ├── evaluator.ts # MODEL_LIGHT 判定 continue/achieved/replan/stuck
+│       │   │   ├── synthesizer.ts # MODEL_STRONG streamLLM 流式汇总
+│       │   │   ├── run.ts       # runPneAgent 编排: 拓扑调度 + 批次并行 + replan
+│       │   │   └── types.ts     # Stage/ExecutionPlan/StageResult/PneDecision
 │       │   ├── knowledge.ts     # 内置知识 + 动态日期上下文
 │       │   ├── prompt-loader.ts # prompt 模板加载（缓存, {{var}} 渲染）
 │       │   ├── logger.ts        # 结构化 JSON 日志（query_classified/tool_call/...）
@@ -129,7 +137,7 @@ agent/
 │       │   ├── memory-extractor.ts / memory-promoter.ts / memory-recall.ts
 │       │   ├── es-client.ts / embedding-client.ts
 │       │   ├── rag-chunker.ts / rag-indexer.ts / rag-search.ts / document-extractor.ts
-│       │   ├── prompts/         # 外部化 prompt 模板（5 路径 + shared/）
+│       │   ├── prompts/         # 外部化 prompt 模板（5 路径 + pne/ + shared/）
 │       │   └── workspace/       # 虚拟文件工作区
 │       ├── tools/
 │       │   ├── index.ts         # 内置工具 + registerTools/registerLcTools
@@ -155,11 +163,13 @@ agent/
 用户输入 → ChatArea.handleSend()
   → msgStore.sendMessage() → POST /api/conversations/:id/messages (SSE)
     → runAgent() → runRoutedAgent()（5 路径分发）
-      → createReactAgent 原生 tool-calling 循环
-        → thought_delta / action / observation / content_delta 事件
-      → 中间轮次（有 tool_calls）内容只走 thought，不产生 content_delta
-      → 最终轮次 text → content_delta（打字机效果）
-      → 后置事实核查 validateAnswer → 失败 yield warning（不覆盖回答）
+      → COMPLEX 路径 runComplex 头部二次分流 shouldUsePne()
+        → 命中 → runPneAgent（PnE 管线，见「PnE 二级分流」）
+        → 未命中/异常回退 → createReactAgent 原生 tool-calling 循环
+          → thought_delta / action / observation / content_delta 事件
+        → 中间轮次（有 tool_calls）内容只走 thought，不产生 content_delta
+        → 最终轮次 text → content_delta（打字机效果）
+        → 后置事实核查 validateAnswer → 失败 yield warning（不覆盖回答）
     → SSE 推送到前端
       → handleSSEEvent() 更新 streamingMessage（按 conversationId 隔离）
   → done → fetchMessages() 替换为持久化消息
@@ -216,6 +226,8 @@ POST 上传（multer，MD/TXT/PDF ≤10MB）、GET 列表、DELETE /:docId
 | thought | 完整思考摘要 (替换最后一个 thought step) |
 | action | 工具调用 (tool_name + input) |
 | observation | 工具执行结果 |
+| plan | PnE 计划快照 (stages: PlanStageSnapshot[]，阶段状态 pending/running/done/skipped) |
+| evaluation | PnE 计划评估 (decision: continue/achieved/replan/stuck + reason) |
 | content_delta | 最终回答片段 (打字机效果) |
 | content | 完整回答内容 (兜底汇总) |
 | warning | 事实核查失败警告 (不覆盖回答) |
@@ -324,6 +336,14 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 - prompt 外部化到 `server/src/prompts/*.txt`，`prompt-loader` 启动缓存加载（不热加载），`{{var}}` 占位渲染
 - 后置事实核查 `validateAnswer()` 失败只 yield `warning` 事件（记日志），不覆盖/不追加回答
 
+### PnE (Plan-and-Execute) 二级分流
+- **触发**：`gate.ts shouldUsePne()` 在 COMPLEX 路径 `runComplex` 头部判定 — `complexity=deep` 强制 / 查询长度 >120 / 信号词正则 `/(对比|分析|方案|规划|步骤|制定|策划|评估)/` / LLM 兜底（20 token，失败 false）
+- **管线**：`runPneAgent`（run.ts）Planner 拆解 JSON 计划 → 拓扑调度（`findReadyStages` 依赖全 done 的 pending 阶段成批，Promise.all 并行执行，批量事件批末回放）→ 每批后 Evaluator 判定 continue/achieved/replan/stuck → Synthesizer 流式汇总（done 恒为最后事件）
+- **防护常量**：`MAX_STAGES=5`、`MAX_REPLAN=2`、`MAX_TOOL_ROUNDS=3`（单阶段）、连续失败 3 次终止、observation 4000 字截断；依赖死锁/evaluator stuck → 强制汇总
+- **回退语义**：PnE 异常且未发过内容（`hasContent`）→ 回退 ReAct 一次（保留 PnE 的 thought/plan 帧，可观察）；已发内容后异常 → thought + done，不回退
+- **事件与持久化**：新增 `plan`（计划快照）与 `evaluation` 两 SSE 事件；thought_steps 持久化方案 A — plan 帧写 `{type: 'plan', content: JSON.stringify(stages)}`，evaluation 写 `{type: 'evaluation'}`，零 DB 迁移；渲染链 `thoughtGroup.groupThoughtSteps` → `PlanStageView`（形状 guard，非法 JSON 降级 note）→ `ThoughtStep.vue` 执行计划 todo
+- prompt 模板在 `prompts/pne/*.txt`（planner/executor/evaluator/synthesizer）
+
 ### 前端
 - 流式消息固定 `w-[45%]`（非 max-w，否则空内容时气泡缩窄）
 - 思考过程默认折叠，步数按 action 数量计数（thought→action→observation = 1轮）
@@ -386,3 +406,6 @@ MCP 启动流程: `readMcpConfig()` → `initMcpClients()` (顺序连接) → `r
 17. **🚨 删库保护** — 禁止 DROP TABLE/DATABASE、删除 .db 文件、空数据覆盖；迁移只能 ADD COLUMN / CREATE TABLE IF NOT EXISTS
 18. **fs_\* 工具仅 local_fs 模式生效** — `workspace_mode` 改 `server/config/workspace.json`（3s 缓存，无需重启）；高危删除/覆盖默认拦截，`auto_confirm_high_risk` 与 `allow_dangerous_delete` 慎开
 19. **fs_\* 沙箱权限模型：allowedDirectories 白名单第一关** — 解析后真实路径不在 `allowedDirectories` 一律拒绝；`sandbox_root` 只是工作基准（相对路径解析起点 + 默认生成位置），不隐式入白名单；白名单为空回落 sandbox_root。`allow_absolute_path=true` 时白名单内绝对路径可用（Desktop 已入白名单）。MCP filesystem server 已移除，本地文件访问统一走 fs_*；SEARCH 路径工具白名单已含 `fs_*`
+20. **PnE 快照持久化（方案 A）** — plan/evaluation 以 thought_steps JSON 字符串存 DB（无独立列/表），渲染侧 `groupThoughtSteps` JSON.parse + 形状 guard 双重防御，畸形老数据降级 note 显示，不崩溃
+21. **PnE 并行批次事件缓冲** — 生成器无法跨 `Promise.all` 流式交错，同批各阶段事件缓冲到批末按序回放；阶段内流式 normal，批间并行真实
+22. **PnE 回退残留可观察** — gate 命中但 PnE 异常回退 ReAct 时，PnE 已发的 thought/plan 帧保留在前端轨迹中（设计行为，非 bug）；排查分流先看 thought【分流】帧
