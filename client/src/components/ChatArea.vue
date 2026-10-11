@@ -1,4 +1,4 @@
-<script setup lang="ts">
+﻿<script setup lang="ts">
 import { ref, watch, computed, nextTick } from 'vue'
 import { useConversationStore } from '../stores/conversation'
 import { useMessageStore } from '../stores/message'
@@ -108,48 +108,57 @@ function getSiblingInfo(message: { id: string; parent_id: string | null }) {
 </script>
 
 <template>
-  <div class="flex-1 flex flex-col h-full bg-chat-bg">
-    <div v-if="!hasActiveConv" class="flex-1 flex flex-col items-center justify-center text-white/30">
-      <svg class="w-20 h-20 opacity-10 mb-4" fill="none" stroke="currentColor" stroke-width="1" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"/></svg>
-      <h2 class="text-[15px] font-medium text-white/50 mb-1">Agent Chat</h2>
-      <p class="text-[13px] text-white/25">{{ isAdmin ? '选择左侧用户，再点击其历史会话查看' : '按 Ctrl+N 创建新对话' }}</p>
+  <div class="flex-1 min-w-0 flex flex-col h-full bg-chat-bg">
+    <div v-if="!hasActiveConv" class="flex-1 flex flex-col items-center justify-center">
+      <div class="relative mb-5">
+        <div class="absolute inset-0 -m-6 rounded-full bg-accent/10 blur-2xl" />
+        <div class="relative w-14 h-14 rounded-2xl bg-surface flex items-center justify-center">
+          <svg class="w-7 h-7 text-accent/80" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+          </svg>
+        </div>
+      </div>
+      <h2 class="text-[15px] font-medium text-main tracking-tight mb-1.5">Agent Chat</h2>
+      <p class="text-[13px] text-mute">{{ isAdmin ? '选择左侧用户，再点击其历史会话查看' : '按 Ctrl+N 创建新对话' }}</p>
     </div>
 
     <template v-else>
-    <div class="px-6 py-3 border-b border-neutral-700 flex items-center justify-between">
-      <h1 class="text-[13px] font-medium text-neutral-800">
+    <div class="px-6 py-3 border-b border-glass-border flex items-center justify-between">
+      <h1 class="text-[13px] font-medium text-soft truncate">
         {{ convStore.conversations.find(c => c.id === convStore.activeId)?.title || 'Agent Chat' }}
       </h1>
       <button
-        class="text-neutral-500 text-[12px] hover:text-neutral-300 transition-colors"
+        class="text-mute text-[12px] hover:text-soft transition-colors shrink-0"
         @click="showPromptDialog = true"
       >System Prompt</button>
     </div>
 
-    <div ref="chatContainer" class="flex-1 overflow-y-auto p-6 space-y-4">
-      <template v-for="(msg, i) in displayMessages" :key="msg.id">
-        <MessageBubble
-          :message="msg"
-          :siblings="getSiblingInfo(msg).siblings"
-          :sibling-index="getSiblingInfo(msg).index"
-          :is-last="i === displayMessages.length - 1 && msg.role === 'assistant'"
-          :is-streaming="false"
-          @switch-branch="(idx) => handleSwitchBranch(msg.id, msg.parent_id, idx)"
-          @regenerate="handleRegenerate(msg.id)"
-        />
-      </template>
-      <div v-if="streamingMessage" class="mr-auto">
-        <MessageBubble
-          :message="streamingMessage"
-          :siblings="[streamingMessage]"
-          :sibling-index="0"
-          :is-last="true"
-          :is-streaming="true"
-        />
+    <div ref="chatContainer" class="flex-1 overflow-y-auto overflow-x-hidden p-6 space-y-4">
+      <div class="[zoom:var(--chat-zoom,1)]">
+        <template v-for="(msg, i) in displayMessages" :key="msg.id">
+          <MessageBubble
+            :message="msg"
+            :siblings="getSiblingInfo(msg).siblings"
+            :sibling-index="getSiblingInfo(msg).index"
+            :is-last="i === displayMessages.length - 1 && msg.role === 'assistant'"
+            :is-streaming="false"
+            @switch-branch="(idx) => handleSwitchBranch(msg.id, msg.parent_id, idx)"
+            @regenerate="handleRegenerate(msg.id)"
+          />
+        </template>
+        <div v-if="streamingMessage" class="mr-auto">
+          <MessageBubble
+            :message="streamingMessage"
+            :siblings="[streamingMessage]"
+            :sibling-index="0"
+            :is-last="true"
+            :is-streaming="true"
+          />
+        </div>
       </div>
     </div>
 
-    <div v-if="showInput" class="border-t border-white/10 p-6">
+    <div v-if="showInput" class="border-t border-glass-border p-6">
       <ChatInput
         :disabled="msgStore.isConversationStreaming(convStore.activeId)"
         @send="handleSend"
@@ -157,27 +166,25 @@ function getSiblingInfo(message: { id: string; parent_id: string | null }) {
       />
     </div>
 
-    <div v-if="showPromptDialog" class="fixed inset-0 bg-black/60 backdrop-blur-xl flex items-center justify-center z-50">
-      <div class="bg-white/5 ring-1 ring-white/10 p-1.5 rounded-[1.5rem]">
-        <div class="bg-[#0A0A0A] rounded-[1.25rem] p-6 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)] w-[480px]">
-          <h2 class="text-[14px] font-medium text-white mb-4">System Prompt</h2>
+    <div v-if="showPromptDialog" class="fixed inset-0 bg-overlay backdrop-blur-xl flex items-center justify-center z-50">
+      <div class="bg-surface rounded-[1.25rem] p-6 shadow-[0_24px_64px_rgba(0,0,0,0.35)] w-[480px]">
+          <h2 class="text-[14px] font-medium text-main mb-4">System Prompt</h2>
           <textarea
             v-model="systemPrompt"
-            class="w-full p-3 bg-white/5 ring-1 ring-white/10 rounded-lg text-[13px] text-white/80 resize-none focus:ring-white/20 transition-all"
+            class="w-full p-3 bg-glass-fill rounded-lg text-[13px] text-main resize-none focus:ring-accent/50 ring-1 ring-glass-border focus:shadow-[0_0_0_3px_rgba(124,140,248,0.12)] transition-all"
             rows="6"
             placeholder="设置此对话的系统提示词..."
           />
           <div class="flex justify-end gap-3 mt-4">
             <button
-              class="px-4 py-1.5 ring-1 ring-white/10 text-[13px] rounded-lg text-white/60 hover:bg-white/10 transition-all"
+              class="px-4 py-1.5 text-[13px] rounded-lg text-soft hover:bg-glass-fill transition-all"
               @click="showPromptDialog = false"
             >取消</button>
             <button
-              class="px-4 py-1.5 bg-white/10 ring-1 ring-white/10 text-[13px] rounded-lg text-white hover:bg-white/15 active:scale-[0.98] transition-all"
+              class="px-4 py-1.5 bg-accent text-[13px] rounded-lg text-white hover:bg-accent-hover active:scale-[0.98] transition-all"
               @click="saveSystemPrompt"
             >保存</button>
           </div>
-        </div>
       </div>
     </div>
     </template>

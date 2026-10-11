@@ -49,22 +49,22 @@ function selectConversation(id: string) {
 </script>
 
 <template>
-  <aside class="w-60 bg-sidebar text-white flex flex-col h-full shrink-0 border-r border-white/10">
-    <div class="p-4 border-b border-white/10">
+  <aside class="w-60 bg-sidebar text-main flex flex-col h-full shrink-0 border-r border-glass-border">
+    <div class="p-4 border-b border-glass-border">
       <template v-if="adminView === 'users'">
-        <h2 class="text-[13px] font-medium text-white/70">用户管理</h2>
+        <h2 class="text-[13px] font-medium text-main">用户管理</h2>
       </template>
       <template v-else>
         <div class="flex items-center gap-2">
           <button
-            class="text-white/30 hover:text-white/60 transition-colors"
+            class="text-mute hover:text-soft transition-colors"
             @click="backToUsers"
           >
             <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/>
             </svg>
           </button>
-          <span class="text-[13px] font-medium text-white/70 truncate">{{ selectedUsername }}</span>
+          <span class="text-[13px] font-medium text-main truncate">{{ selectedUsername }}</span>
         </div>
       </template>
     </div>
@@ -74,13 +74,13 @@ function selectConversation(id: string) {
         <div
           v-for="user in users"
           :key="user.id"
-          class="px-4 py-3 cursor-pointer text-[13px] truncate transition-all hover:bg-white/5 border-l-2 border-l-transparent text-white/60"
+          class="px-4 py-3 cursor-pointer text-[13px] truncate transition-all hover:bg-glass-fill border-l-2 border-l-transparent text-soft"
           @click="selectUser(user)"
         >
           <div class="flex items-center gap-2">
             <span class="text-base">{{ user.avatar }}</span>
             <span class="truncate">{{ user.username }}</span>
-            <span v-if="user.role === 'admin'" class="text-[10px] text-white/15 ml-auto shrink-0">管理员</span>
+            <span v-if="user.role === 'admin'" class="text-[10px] text-mute ml-auto shrink-0">管理员</span>
           </div>
         </div>
       </template>
@@ -88,8 +88,8 @@ function selectConversation(id: string) {
         <div
           v-for="conv in convStore.conversations"
           :key="conv.id"
-          class="px-4 py-3 cursor-pointer text-[13px] truncate transition-all border-l-2 text-white/60"
-          :class="conv.id === convStore.activeId ? 'bg-white/10 border-l-white' : 'border-l-transparent hover:bg-white/5'"
+          class="px-4 py-3 cursor-pointer text-[13px] truncate transition-all border-l-2 text-soft"
+          :class="conv.id === convStore.activeId ? 'bg-glass-fill border-l-accent' : 'border-l-transparent hover:bg-glass-fill'"
           @click="selectConversation(conv.id)"
         >
           <span class="truncate">{{ conv.title }}</span>

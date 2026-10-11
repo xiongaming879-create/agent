@@ -11,9 +11,9 @@ defineEmits<{
 </script>
 
 <template>
-  <div v-if="siblings.length > 1" class="flex items-center gap-2 text-[13px] text-white/30 select-none">
+  <div v-if="siblings.length > 1" class="flex items-center gap-1.5 text-[13px] text-mute select-none">
     <button
-      class="px-2 py-1 ring-1 ring-white/10 rounded-md hover:bg-white/10 hover:text-white/60 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+      class="px-2 py-1 rounded-md hover:bg-glass-fill hover:text-soft transition-all disabled:opacity-30 disabled:cursor-not-allowed"
       :disabled="currentIndex === 0"
       @click="$emit('prev')"
     >
@@ -21,7 +21,7 @@ defineEmits<{
     </button>
     <span class="text-[11px]">{{ currentIndex + 1 }}/{{ siblings.length }}</span>
     <button
-      class="px-2 py-1 ring-1 ring-white/10 rounded-md hover:bg-white/10 hover:text-white/60 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+      class="px-2 py-1 rounded-md hover:bg-glass-fill hover:text-soft transition-all disabled:opacity-30 disabled:cursor-not-allowed"
       :disabled="currentIndex === siblings.length - 1"
       @click="$emit('next')"
     >

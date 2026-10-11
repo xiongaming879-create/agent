@@ -30,21 +30,22 @@ useKeyboard({
   'Ctrl+B': () => toggleSidebar(),
 })
 
+// 字号缩放只作用于消息区内容（ChatArea 内层 --chat-zoom），页面布局不动
 watch(() => authStore.user?.font_size, (size) => {
-  if (size) document.documentElement.style.setProperty('--base-font-size', `${size}px`)
+  if (size) document.documentElement.style.setProperty('--chat-zoom', String(size / 14))
 }, { immediate: true })
 </script>
 
 <template>
-  <div class="flex h-screen w-screen overflow-hidden bg-[#050505]">
+  <div class="flex h-screen w-screen overflow-hidden bg-chat-bg">
     <template v-if="authStore.user?.role !== 'admin'">
       <aside
-        class="bg-sidebar text-white flex flex-col h-full shrink-0 transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] overflow-hidden border-r border-white/10"
+        class="bg-sidebar text-main flex flex-col h-full shrink-0 transition-all duration-500 ease-[cubic-bezier(0.32,0.72,0,1)] overflow-hidden border-r border-glass-border"
         :class="sidebarCollapsed ? 'w-[60px]' : 'w-[280px]'"
       >
-        <div class="p-3 border-b border-white/10 flex items-center" :class="sidebarCollapsed ? 'justify-center' : 'justify-between'">
+        <div class="p-3 border-b border-glass-border flex items-center" :class="sidebarCollapsed ? 'justify-center' : 'justify-between'">
           <button
-            class="w-8 h-8 rounded-lg flex items-center justify-center text-white/40 hover:text-white/70 hover:bg-white/10 transition-all active:scale-[0.95]"
+            class="w-8 h-8 rounded-lg flex items-center justify-center text-mute hover:text-soft hover:bg-glass-fill transition-all active:scale-[0.95]"
             @click="toggleSidebar"
             :title="sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'"
           >
@@ -54,7 +55,7 @@ watch(() => authStore.user?.font_size, (size) => {
           </button>
           <button
             v-if="!sidebarCollapsed"
-            class="px-3 py-1.5 ring-1 ring-white/10 rounded-lg text-[12px] text-white/50 hover:text-white/80 hover:bg-white/10 transition-all active:scale-[0.98]"
+            class="px-3 py-1.5 rounded-lg text-[12px] text-mute hover:text-main hover:bg-glass-fill transition-all active:scale-[0.98]"
             @click="convStore.create()"
           >+ 新对话</button>
         </div>
