@@ -47,19 +47,18 @@ async function submit() {
 </script>
 
 <template>
-  <div class="flex items-center justify-center h-screen w-screen bg-[#050505]">
-    <div class="bg-white/5 ring-1 ring-white/10 p-1.5 rounded-[1.5rem] w-[380px]">
-      <div class="bg-[#0A0A0A] rounded-[1.25rem] p-8 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)]">
-        <h1 class="text-[17px] font-semibold text-white tracking-tight text-center mb-6">Agent Chat</h1>
-        <div class="flex gap-1 bg-white/5 ring-1 ring-white/10 rounded-lg p-1 mb-6">
+  <div class="relative flex items-center justify-center h-screen w-screen bg-chat-bg overflow-hidden">
+    <div class="absolute -top-32 left-1/2 -translate-x-1/2 w-[560px] h-[320px] bg-accent/10 blur-[120px] rounded-full pointer-events-none" />
+    <div class="bg-surface rounded-[1.5rem] p-8 w-[380px] shadow-[0_24px_64px_rgba(0,0,0,0.35)]">
+        <h1 class="text-[17px] font-semibold text-main tracking-tight text-center mb-6">Agent Chat</h1>        <div class="flex gap-1 bg-glass-fill rounded-lg p-1 mb-6">
           <button
             class="flex-1 py-2 text-[13px] rounded-md transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
-            :class="!isRegister ? 'bg-white/10 text-white ring-1 ring-white/10' : 'text-white/40 hover:text-white/60'"
+            :class="!isRegister ? 'bg-surface text-main shadow-[0_1px_3px_rgba(0,0,0,0.15)]' : 'text-mute hover:text-soft'"
             @click="isRegister = false"
           >登录</button>
           <button
             class="flex-1 py-2 text-[13px] rounded-md transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
-            :class="isRegister ? 'bg-white/10 text-white ring-1 ring-white/10' : 'text-white/40 hover:text-white/60'"
+            :class="isRegister ? 'bg-surface text-main shadow-[0_1px_3px_rgba(0,0,0,0.15)]' : 'text-mute hover:text-soft'"
             @click="isRegister = true"
           >注册</button>
         </div>
@@ -69,14 +68,14 @@ async function submit() {
             type="text"
             placeholder="用户名"
             autocomplete="username"
-            class="w-full px-4 py-2.5 bg-white/5 ring-1 ring-white/10 rounded-lg text-[13px] text-white/80 focus:ring-white/20 transition-all"
+            class="w-full px-4 py-2.5 bg-glass-fill rounded-lg text-[13px] text-main focus:ring-accent/50 ring-1 ring-glass-border transition-all"
           />
           <input
             v-model="password"
             type="password"
             placeholder="密码"
             autocomplete="current-password"
-            class="w-full px-4 py-2.5 bg-white/5 ring-1 ring-white/10 rounded-lg text-[13px] text-white/80 focus:ring-white/20 transition-all"
+            class="w-full px-4 py-2.5 bg-glass-fill rounded-lg text-[13px] text-main focus:ring-accent/50 ring-1 ring-glass-border transition-all"
           />
           <input
             v-if="isRegister"
@@ -84,16 +83,15 @@ async function submit() {
             type="password"
             placeholder="确认密码"
             autocomplete="new-password"
-            class="w-full px-4 py-2.5 bg-white/5 ring-1 ring-white/10 rounded-lg text-[13px] text-white/80 focus:ring-white/20 transition-all"
+            class="w-full px-4 py-2.5 bg-glass-fill rounded-lg text-[13px] text-main focus:ring-accent/50 ring-1 ring-glass-border transition-all"
           />
           <p v-if="error" class="text-red-400/80 text-[12px]">{{ error }}</p>
           <button
             type="submit"
             :disabled="loading"
-            class="w-full py-2.5 bg-white/10 ring-1 ring-white/10 text-white text-[13px] rounded-lg hover:bg-white/15 active:scale-[0.98] transition-all disabled:opacity-40"
+            class="w-full py-2.5 bg-accent text-white text-[13px] font-medium rounded-lg hover:bg-accent-hover active:scale-[0.98] transition-all duration-200 disabled:opacity-40 shadow-[0_2px_8px_rgba(124,140,248,0.25)]"
           >{{ loading ? '处理中...' : (isRegister ? '注册' : '登录') }}</button>
         </form>
-      </div>
     </div>
   </div>
 </template>

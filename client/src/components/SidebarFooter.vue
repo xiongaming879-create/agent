@@ -23,11 +23,11 @@ function logout() {
 </script>
 
 <template>
-  <div class="border-t border-white/10 p-3">
+  <div class="border-t border-glass-border p-3">
     <div class="flex items-center gap-2" :class="collapsed ? 'justify-center' : ''">
       <button
-        class="w-8 h-8 rounded-full flex items-center justify-center text-sm hover:bg-white/10 transition-colors shrink-0 overflow-hidden"
-        :style="!isAvatarImagePath(authStore.user?.avatar || '') ? { backgroundColor: getAvatarBgColor(authStore.user?.username || 'U') } : { backgroundColor: 'rgba(255,255,255,0.05)' }"
+        class="w-8 h-8 rounded-full flex items-center justify-center text-sm hover:bg-glass-fill transition-colors shrink-0 overflow-hidden"
+        :style="!isAvatarImagePath(authStore.user?.avatar || '') ? { backgroundColor: getAvatarBgColor(authStore.user?.username || 'U') } : { backgroundColor: 'var(--bg-surface-active)' }"
         @click="showProfile = true"
         :title="authStore.user?.username"
       >
@@ -37,14 +37,14 @@ function logout() {
           alt="avatar"
           class="w-full h-full object-cover"
         />
-        <span v-else class="text-white text-xs font-medium">
+        <span v-else class="text-main text-xs font-medium">
           {{ getInitialLetter(authStore.user?.username || 'U') }}
         </span>
       </button>
-      <span v-if="!collapsed" class="text-[13px] text-white/50 truncate flex-1">{{ authStore.user?.username }}</span>
+      <span v-if="!collapsed" class="text-[13px] text-soft truncate flex-1">{{ authStore.user?.username }}</span>
       <button
         v-if="!collapsed"
-        class="text-white/30 hover:text-white/60 transition-colors p-1"
+        class="text-mute hover:text-soft transition-colors p-1"
         @click="showSettings = true"
         title="设置"
       >

@@ -4,8 +4,11 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Chat</title>
+    <script>
+      document.documentElement.classList.toggle('dark', window.matchMedia('(prefers-color-scheme: dark)').matches)
+    </script>
   </head>
-  <body class="bg-white text-black m-0 p-0">
+  <body class="m-0 p-0">
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

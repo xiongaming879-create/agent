@@ -101,9 +101,9 @@ function planStatusIcon(status: PlanStageView['status']): string {
 }
 
 function planStatusClass(status: PlanStageView['status']): string {
-  if (status === 'done') return 'text-emerald-400'
-  if (status === 'running') return 'text-amber-400'
-  return 'text-neutral-600'
+  if (status === 'done') return 'text-emerald-600 dark:text-emerald-400'
+  if (status === 'running') return 'text-amber-600 dark:text-amber-400'
+  return 'text-mute'
 }
 
 const PLAN_STATUSES: readonly string[] = ['pending', 'running', 'done', 'skipped']
@@ -125,10 +125,10 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
   <div class="space-y-0.5">
     <template v-for="(item, i) in props.items" :key="i">
       <!-- 思考段落 -->
-      <div v-if="item.kind === 'note'" class="text-neutral-400 text-[13px] leading-relaxed break-words py-0.5 italic">
+      <div v-if="item.kind === 'note'" class="text-soft text-[13px] leading-relaxed break-words py-0.5 italic">
         <div class="markdown-body thought-md" v-html="renderMarkdown(item.content)" /><svg
           v-if="i === props.items.length - 1 && props.isStreaming"
-          class="inline-block w-3 h-3 ml-1 align-middle text-neutral-400 animate-spin"
+          class="inline-block w-3 h-3 ml-1 align-middle text-mute animate-spin"
           fill="none" viewBox="0 0 24 24"
         >
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
@@ -139,95 +139,110 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
       <!-- 执行计划 todo -->
       <div
         v-else-if="item.kind === 'plan'"
-        class="rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 space-y-1"
+        class="rounded-md border border-glass-border bg-glass-fill px-2.5 py-2 space-y-1"
       >
-        <div class="text-neutral-500 text-[11px] font-medium">执行计划</div>
+        <div class="text-mute text-[11px] font-medium">执行计划</div>
         <template v-if="validPlanStages(item.stages).length">
           <div
             v-for="s in validPlanStages(item.stages)"
             :key="s.index"
-            class="flex items-center gap-1.5 text-[12px] leading-relaxed"
+            class="text-[12px] leading-relaxed"
           >
-            <span class="shrink-0 w-4 text-center text-[11px]" :class="planStatusClass(s.status)">{{ planStatusIcon(s.status) }}</span>
-            <span
-              class="text-neutral-300 break-all"
-              :class="s.status === 'skipped' ? 'line-through text-neutral-600' : ''"
-            >{{ s.index }}. {{ s.goal }}</span>
-            <span v-if="s.dependsOn.length" class="shrink-0 text-neutral-600 text-[11px]">依赖 {{ s.dependsOn.join(',') }}</span>
-            <span v-if="s.outcome" class="text-neutral-500 text-[11px] truncate ml-auto shrink">{{ s.outcome }}</span>
+            <div class="flex items-center gap-1.5">
+              <span class="shrink-0 w-4 text-center text-[11px]" :class="planStatusClass(s.status)">{{ planStatusIcon(s.status) }}</span>
+              <span
+                class="text-soft break-all flex-1 min-w-0"
+                :class="s.status === 'skipped' ? 'line-through text-mute' : ''"
+              >{{ s.index }}. {{ s.goal }}</span>
+              <span v-if="s.dependsOn.length" class="shrink-0 text-mute text-[11px]">依赖 {{ s.dependsOn.join(',') }}</span>
+            </div>
+            <div v-if="s.outcome" class="text-mute text-[11px] mt-0.5 ml-[22px]">
+              <div class="flex items-baseline gap-1">
+                <button
+                  class="shrink-0 text-mute hover:text-soft transition-colors"
+                  @click="toggle(`p${s.index}`)"
+                >
+                  <svg
+                    class="w-3 h-3 transition-transform duration-200"
+                    :class="isOpen(`p${s.index}`) ? 'rotate-90' : ''"
+                    fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
+                  ><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
+                </button>
+                <div class="min-w-0 flex-1 markdown-body thought-md" :class="!isOpen(`p${s.index}`) ? 'line-clamp-1' : ''" v-html="renderMarkdown(s.outcome)" />
+              </div>
+            </div>
           </div>
         </template>
-        <div v-else class="text-neutral-600 text-[11px] italic">(计划数据无效)</div>
+        <div v-else class="text-mute text-[11px] italic">(计划数据无效)</div>
       </div>
 
       <!-- 工具调用 pill -->
       <div v-else>
         <button
-          class="w-full flex items-center gap-2 text-left rounded-md px-1.5 py-1 hover:bg-white/5 transition-colors text-[12px]"
+          class="w-full flex items-center gap-2 text-left rounded-md px-1.5 py-1 hover:bg-glass-fill transition-colors text-[12px]"
           @click="toggleDetail(i)"
         >
-          <svg v-if="item.streaming" class="w-3 h-3 shrink-0 text-neutral-400 animate-spin" fill="none" viewBox="0 0 24 24">
+          <svg v-if="item.streaming" class="w-3 h-3 shrink-0 text-mute animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
           </svg>
-          <span v-else-if="item.success === true" class="shrink-0 text-emerald-400 text-[11px]">✓</span>
-          <span v-else-if="item.success === false" class="shrink-0 text-red-400 text-[11px]">✗</span>
-          <span v-else class="shrink-0 text-neutral-600">·</span>
+          <span v-else-if="item.success === true" class="shrink-0 text-emerald-600 dark:text-emerald-400 text-[11px]">✓</span>
+          <span v-else-if="item.success === false" class="shrink-0 text-red-600 dark:text-red-400 text-[11px]">✗</span>
+          <span v-else class="shrink-0 text-mute">·</span>
 
-          <span class="text-neutral-300 font-medium shrink-0">{{ item.toolName }}</span>
-          <span class="text-neutral-500 truncate">{{ shortInput(item) }}</span>
+          <span class="text-main font-medium shrink-0">{{ item.toolName }}</span>
+          <span class="flex-1 min-w-0 text-soft truncate">{{ shortInput(item) }}</span>
 
-          <span class="flex-1" />
-          <span v-if="item.durationMs !== null" class="text-neutral-500 text-[11px] shrink-0">{{ formatDuration(item.durationMs) }}</span>
+          <span v-if="item.durationMs !== null" class="text-mute text-[11px] shrink-0">{{ formatDuration(item.durationMs) }}</span>
           <svg
-            class="w-3 h-3 shrink-0 text-neutral-500 transition-transform duration-200"
+            class="w-3 h-3 shrink-0 text-mute transition-transform duration-200"
             :class="isDetailOpen(i) ? 'rotate-90' : ''"
             fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"
           ><path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" /></svg>
         </button>
 
-        <div v-if="isDetailOpen(i) && renders[i]" class="ml-2 pl-3 border-l border-neutral-800 mt-1 mb-1.5 space-y-2">
+        <div v-if="isDetailOpen(i) && renders[i]" class="ml-2 pl-3 border-l border-glass-border mt-1 mb-1.5 space-y-2">
           <!-- 轮内思考 -->
-          <div v-if="item.thought" class="text-neutral-400 italic text-[12px] leading-relaxed break-words">
+          <div v-if="item.thought" class="text-soft text-[12px] leading-relaxed">
             <div class="markdown-body thought-md" v-html="renderMarkdown(item.thought)" />
           </div>
 
           <!-- 输入 -->
           <div class="text-[12px]">
-            <span class="text-neutral-500">输入:</span>
+            <span class="text-mute">输入:</span>
             <div v-if="renders[i]!.queries" class="flex flex-wrap gap-1 mt-1">
               <span
                 v-for="(q, qi) in renders[i]!.queries"
                 :key="qi"
-                class="px-1.5 py-0.5 rounded bg-neutral-800 border border-neutral-700 text-neutral-300 text-[11px] break-all"
+                class="px-1.5 py-0.5 rounded bg-glass-fill border border-glass-border text-soft text-[11px] break-all"
               >{{ q }}</span>
             </div>
-            <span v-else-if="item.toolName === 'calculator'" class="text-neutral-300 font-mono break-all">{{ renders[i]!.inputObj?.expression }}</span>
-            <span v-else-if="item.toolName === 'search' || item.toolName === 'knowledge_search'" class="text-neutral-300 break-all">「{{ renders[i]!.inputObj?.input ?? renders[i]!.inputObj?.query ?? item.input }}」</span>
+            <span v-else-if="item.toolName === 'calculator'" class="text-main font-mono break-all">{{ renders[i]!.inputObj?.expression }}</span>
+            <span v-else-if="item.toolName === 'search' || item.toolName === 'knowledge_search'" class="text-main break-all">「{{ renders[i]!.inputObj?.input ?? renders[i]!.inputObj?.query ?? item.input }}」</span>
             <div v-else-if="renders[i]!.kvInput" class="mt-1 space-y-0.5">
               <div v-for="row in renders[i]!.kvInput" :key="row.key" class="flex gap-2">
-                <span class="text-neutral-500 shrink-0 font-mono text-[11px]">{{ row.key }}:</span>
-                <span class="text-neutral-300 break-all">{{ row.value }}</span>
+                <span class="text-mute shrink-0 font-mono text-[11px]">{{ row.key }}:</span>
+                <span class="text-soft break-all">{{ row.value }}</span>
               </div>
             </div>
-            <span v-else class="text-neutral-300 break-all">{{ item.input }}</span>
+            <span v-else class="text-main break-all">{{ item.input }}</span>
           </div>
 
           <!-- 输出 -->
-          <div v-if="item.streaming" class="text-neutral-500 text-[12px]">执行中…</div>
+          <div v-if="item.streaming" class="text-mute text-[12px]">执行中…</div>
           <div v-else-if="item.output !== null" class="text-[12px]">
-            <span class="text-neutral-500">结果:</span>
+            <span class="text-mute">结果:</span>
 
             <!-- 文件读取:路径 chip + 纯文本代码块(工具输出不渲染 markdown) -->
             <div v-if="renders[i]!.fileRead" class="mt-1 space-y-1">
               <div v-if="renders[i]!.fileRead!.fileName" class="flex items-center gap-2 min-w-0">
-                <span class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-neutral-800 border border-neutral-700 text-neutral-300 text-[11px]">📄 {{ renders[i]!.fileRead!.fileName }}</span>
-                <span class="text-neutral-600 text-[11px] truncate">{{ renders[i]!.fileRead!.path }}</span>
+                <span class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-glass-fill border border-glass-border text-soft text-[11px]">📄 {{ renders[i]!.fileRead!.fileName }}</span>
+                <span class="text-mute text-[11px] truncate">{{ renders[i]!.fileRead!.path }}</span>
               </div>
               <pre class="file-code" :class="!isOpen(`f${i}`) ? 'line-clamp-6' : ''">{{ renders[i]!.fileRead!.content }}</pre>
               <button
                 v-if="needsExpand(renders[i]!.fileRead!.content, 500)"
-                class="text-white/25 hover:text-white/50 text-[11px]"
+                class="text-mute hover:text-soft text-[11px]"
                 @click="toggle(`f${i}`)"
               >{{ isOpen(`f${i}`) ? '收起' : '展开' }}</button>
             </div>
@@ -235,14 +250,14 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
             <!-- 目录列表:文件树行 -->
             <div v-else-if="renders[i]!.dirRows" class="mt-1 space-y-0.5">
               <div :class="!isOpen(`d${i}`) && renders[i]!.dirRows!.length > 8 ? 'line-clamp-8' : ''">
-                <div v-for="(row, ri) in renders[i]!.dirRows" :key="ri" class="flex items-center gap-1.5 font-mono text-[12px] text-neutral-300">
+                <div v-for="(row, ri) in renders[i]!.dirRows" :key="ri" class="flex items-center gap-1.5 font-mono text-[12px] text-soft">
                   <span class="shrink-0">{{ row.isDir ? '📁' : row.isSymlink ? '🔗' : '📄' }}</span>
-                  <span class="break-all">{{ row.name }}<span v-if="row.isSymlink" class="text-neutral-600"> (symlink)</span></span>
+                  <span class="break-all">{{ row.name }}<span v-if="row.isSymlink" class="text-mute"> (symlink)</span></span>
                 </div>
               </div>
               <button
                 v-if="renders[i]!.dirRows!.length > 8"
-                class="text-white/25 hover:text-white/50 text-[11px]"
+                class="text-mute hover:text-soft text-[11px]"
                 @click="toggle(`d${i}`)"
               >{{ isOpen(`d${i}`) ? '收起' : `展开全部 ${renders[i]!.dirRows!.length} 项` }}</button>
             </div>
@@ -250,7 +265,7 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
             <!-- 搜索卡片(单条 search 或 parallel_search 分段) -->
             <div v-else-if="renders[i]!.sections" class="mt-1 space-y-2">
               <div v-for="(s, si) in renders[i]!.sections" :key="si">
-                <div v-if="renders[i]!.sections!.length > 1" class="text-neutral-300 text-[11px] font-medium mb-1">🔍 {{ s.query }}</div>
+                <div v-if="renders[i]!.sections!.length > 1" class="text-soft text-[11px] font-medium mb-1">🔍 {{ s.query }}</div>
                 <div v-if="s.cards" class="space-y-1.5">
                   <a
                     v-for="(c, ci) in s.cards"
@@ -258,17 +273,17 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
                     :href="c.link"
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="block rounded-md border border-neutral-800 bg-neutral-900/60 hover:border-neutral-600 transition-colors px-2.5 py-2"
+                    class="block rounded-md border border-glass-border bg-glass-fill hover:border-accent/40 transition-colors px-2.5 py-2"
                   >
-                    <div class="text-neutral-200 text-[12px] font-medium break-words">{{ c.title || hostOf(c.link) }}</div>
-                    <div class="text-neutral-500 text-[11px] truncate">{{ hostOf(c.link) }}</div>
-                    <div class="line-clamp-3 text-neutral-400 text-[12px] leading-relaxed mt-0.5 break-words">{{ c.content }}</div>
+                    <div class="text-main text-[12px] font-medium break-words">{{ c.title || hostOf(c.link) }}</div>
+                    <div class="text-mute text-[11px] truncate">{{ hostOf(c.link) }}</div>
+                    <div class="line-clamp-3 text-soft text-[12px] leading-relaxed mt-0.5 break-words">{{ c.content }}</div>
                   </a>
                 </div>
-                <div v-else class="text-neutral-400 whitespace-pre-wrap break-words" :class="!isOpen(`s${i}:${si}`) ? 'line-clamp-6' : ''">{{ s.raw }}</div>
+                <div v-else class="text-soft whitespace-pre-wrap break-words" :class="!isOpen(`s${i}:${si}`) ? 'line-clamp-6' : ''">{{ s.raw }}</div>
                 <button
                   v-if="!s.cards && needsExpand(s.raw, 300)"
-                  class="text-white/25 hover:text-white/50 text-[11px] mt-0.5"
+                  class="text-mute hover:text-soft text-[11px] mt-0.5"
                   @click="toggle(`s${i}:${si}`)"
                 >{{ isOpen(`s${i}:${si}`) ? '收起' : '展开' }}</button>
               </div>
@@ -279,41 +294,41 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
               <div
                 v-for="(c, ci) in renders[i]!.knowledge"
                 :key="ci"
-                class="rounded-md border border-neutral-800 bg-neutral-900/60 px-2.5 py-2"
+                class="rounded-md border border-glass-border bg-glass-fill px-2.5 py-2"
               >
                 <div class="mb-1">
-                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-neutral-800 text-neutral-300 text-[11px]">
+                  <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-surface-hover text-soft text-[11px]">
                     📄 {{ c.source }}<template v-if="c.page"> · {{ c.page }}</template>
                   </span>
                 </div>
-                <div class="text-neutral-400 text-[12px] leading-relaxed break-words" :class="!isOpen(`k${i}:${ci}`) ? 'line-clamp-4' : ''">{{ c.content }}</div>
+                <div class="text-soft text-[12px] leading-relaxed break-words" :class="!isOpen(`k${i}:${ci}`) ? 'line-clamp-4' : ''">{{ c.content }}</div>
                 <button
                   v-if="needsExpand(c.content, 200)"
-                  class="text-white/25 hover:text-white/50 text-[11px] mt-0.5"
+                  class="text-mute hover:text-soft text-[11px] mt-0.5"
                   @click="toggle(`k${i}:${ci}`)"
                 >{{ isOpen(`k${i}:${ci}`) ? '收起' : '展开' }}</button>
               </div>
             </div>
 
             <!-- calculator: 算式 = 结果 -->
-            <div v-else-if="item.toolName === 'calculator'" class="mt-1 font-mono text-neutral-200 bg-neutral-900/60 rounded-md px-2.5 py-2 break-all">
-              {{ renders[i]!.inputObj?.expression }} <span class="text-neutral-500">=</span> {{ item.output }}
+            <div v-else-if="item.toolName === 'calculator'" class="mt-1 font-mono text-main bg-glass-fill rounded-md px-2.5 py-2 break-all">
+              {{ renders[i]!.inputObj?.expression }} <span class="text-mute">=</span> {{ item.output }}
             </div>
 
             <!-- 其他工具 JSON 转键值 -->
             <div v-else-if="renders[i]!.kv" class="mt-1 space-y-0.5">
               <div v-for="row in renders[i]!.kv" :key="row.key" class="flex gap-2">
-                <span class="text-neutral-500 shrink-0 font-mono text-[11px]">{{ row.key }}:</span>
-                <span class="text-neutral-300 break-all">{{ row.value }}</span>
+                <span class="text-mute shrink-0 font-mono text-[11px]">{{ row.key }}:</span>
+                <span class="text-soft break-all">{{ row.value }}</span>
               </div>
             </div>
 
             <!-- 纯文本兜底 -->
             <template v-else>
-              <div class="mt-1 text-neutral-400 whitespace-pre-wrap break-words" :class="!isOpen(`o${i}`) ? 'line-clamp-6' : ''">{{ item.output }}</div>
+              <div class="mt-1 text-soft whitespace-pre-wrap break-words" :class="!isOpen(`o${i}`) ? 'line-clamp-6' : ''">{{ item.output }}</div>
               <button
                 v-if="needsExpand(item.output!, 300)"
-                class="text-white/25 hover:text-white/50 text-[11px]"
+                class="text-mute hover:text-soft text-[11px]"
                 @click="toggle(`o${i}`)"
               >{{ isOpen(`o${i}`) ? '收起' : '展开' }}</button>
             </template>
@@ -330,13 +345,19 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 11px;
   line-height: 1.6;
-  color: #d4d4d4;
-  background: rgba(23, 23, 23, 0.6);
-  border: 1px solid #262626;
+  color: var(--text-main);
+  background: var(--bg-surface);
+  border: 1px solid var(--glass-border);
   border-radius: 6px;
   padding: 8px 10px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+.line-clamp-1 {
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 .line-clamp-3 {
   display: -webkit-box;
@@ -367,6 +388,12 @@ function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
   margin: 0.25em 0;
 }
 .thought-md :deep(p:first-child) {
+  margin-top: 0;
+}
+.thought-md :deep(h1:first-child),
+.thought-md :deep(h2:first-child),
+.thought-md :deep(h3:first-child),
+.thought-md :deep(h4:first-child) {
   margin-top: 0;
 }
 .thought-md :deep(p:last-child) {

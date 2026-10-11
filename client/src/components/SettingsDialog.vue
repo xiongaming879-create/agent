@@ -1,5 +1,5 @@
-<script setup lang="ts">
-import { ref, computed } from 'vue'
+﻿<script setup lang="ts">
+import { ref, computed, watchEffect } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { isAvatarImagePath, getInitialLetter, getAvatarBgColor, avatarSrc } from '../composables/useAvatar'
 
@@ -11,8 +11,20 @@ const authStore = useAuthStore()
 const fileInput = ref<HTMLInputElement | null>(null)
 const uploading = ref(false)
 
-const themes: { value: 'dark' | 'auto'; label: string; icon: string }[] = [
-  { value: 'dark', label: '暗色', icon: '☾' },
+const systemPrefersDark = ref(window.matchMedia('(prefers-color-scheme: dark)').matches)
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+  systemPrefersDark.value = e.matches
+})
+
+watchEffect(() => {
+  const theme = authStore.user?.theme || 'auto'
+  const dark = theme === 'dark' || (theme === 'auto' && systemPrefersDark.value)
+  document.documentElement.classList.toggle('dark', dark)
+})
+
+const themes: { value: 'light' | 'dark' | 'auto'; label: string; icon: string }[] = [
+  { value: 'dark', label: '暗夜', icon: '☾' },
+  { value: 'light', label: '亮色', icon: '☀' },
   { value: 'auto', label: '系统', icon: '◐' },
 ]
 
@@ -79,68 +91,64 @@ function avatarBgColor(): string {
 <template>
   <Transition name="overlay">
     <div
-      class="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-2xl bg-black/60"
+      class="fixed inset-0 z-50 flex items-center justify-center backdrop-blur-2xl bg-overlay"
       @click.self="emit('close')"
     >
       <Transition name="panel" appear>
-        <!-- Outer Shell (Double-Bezel) -->
-        <div class="bg-white/5 ring-1 ring-white/10 p-1.5 rounded-[1.5rem] w-[380px]">
-          <!-- Inner Core -->
-          <div class="bg-[#0A0A0A] rounded-[1.25rem] p-7 shadow-[inset_0_1px_1px_rgba(255,255,255,0.06)]">
+        <!-- Inner Core -->
+        <div class="bg-surface rounded-[1.25rem] p-7 shadow-[0_24px_64px_rgba(0,0,0,0.35)] w-[420px] max-w-[90vw]">
 
             <!-- Header -->
             <div class="flex items-center justify-between mb-8">
               <div>
-                <h2 class="text-[15px] font-semibold text-white tracking-tight">设置</h2>
-                <p class="text-[11px] text-white/30 mt-0.5 tracking-wide">个性化你的体验</p>
+                <h2 class="text-[15px] font-semibold text-main tracking-tight">设置</h2>
+                <p class="text-[11px] text-mute mt-0.5 tracking-wide">个性化你的体验</p>
               </div>
               <button
-                class="w-7 h-7 rounded-full bg-white/5 ring-1 ring-white/10 flex items-center justify-center hover:bg-white/10 active:scale-[0.95] transition-all duration-200"
+                class="w-7 h-7 rounded-full text-mute hover:text-soft flex items-center justify-center active:scale-[0.95] transition-all duration-200"
                 @click="emit('close')"
               >
-                <svg class="w-3 h-3 text-white/50" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
                   <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
                 </svg>
               </button>
             </div>
 
-            <!-- Avatar Section (Bento Hero) -->
-            <div class="bg-white/5 ring-1 ring-white/10 rounded-[1rem] p-5 mb-5">
+            <!-- Avatar Section -->
+            <div class="bg-glass-fill rounded-[1rem] p-5 mb-5">
               <div class="flex items-center gap-4">
-                <!-- Avatar Circle (Double-Bezel) -->
+                <!-- Avatar Circle -->
                 <div
                   class="relative cursor-pointer group"
                   @click="triggerFileInput"
                 >
-                  <div class="bg-white/5 ring-1 ring-white/10 p-[3px] rounded-full">
-                    <div
-                      class="w-14 h-14 rounded-full overflow-hidden flex items-center justify-center relative"
-                      :style="!isAvatarImagePath(authStore.user?.avatar || '')
-                        ? { backgroundColor: avatarBgColor() }
-                        : { backgroundColor: '#1a1a1a' }"
-                    >
-                      <img
-                        v-if="isAvatarImagePath(authStore.user?.avatar || '')"
-                        :src="avatarSrc(authStore.user?.avatar || '')"
-                        alt="avatar"
-                        class="w-full h-full object-cover"
-                      />
-                      <span v-else class="text-white text-lg font-semibold">
-                        {{ getInitialLetter(authStore.user?.username || 'U') }}
-                      </span>
-                    </div>
+                  <div
+                    class="w-14 h-14 rounded-full overflow-hidden flex items-center justify-center relative ring-1 ring-glass-border"
+                    :style="!isAvatarImagePath(authStore.user?.avatar || '')
+                      ? { backgroundColor: avatarBgColor() }
+                      : { backgroundColor: 'var(--bg-surface-active)' }"
+                  >
+                    <img
+                      v-if="isAvatarImagePath(authStore.user?.avatar || '')"
+                      :src="avatarSrc(authStore.user?.avatar || '')"
+                      alt="avatar"
+                      class="w-full h-full object-cover"
+                    />
+                    <span v-else class="text-white text-lg font-semibold">
+                      {{ getInitialLetter(authStore.user?.username || 'U') }}
+                    </span>
                   </div>
                   <!-- Hover overlay -->
-                  <div class="absolute inset-0 rounded-full bg-white/10 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]">
-                    <svg class="w-4 h-4 text-white/80" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
+                  <div class="absolute inset-0 rounded-full bg-glass-fill flex items-center justify-center opacity-0 group-hover:opacity-100 transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]">
+                    <svg class="w-4 h-4 text-main" fill="none" stroke="currentColor" stroke-width="1.5" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.774 48.774 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z"/>
                       <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0z"/>
                     </svg>
                   </div>
                 </div>
                 <div class="flex-1 min-w-0">
-                  <p class="text-[13px] text-white/80 font-medium truncate">{{ authStore.user?.username }}</p>
-                  <p class="text-[11px] text-white/30 mt-0.5">
+                  <p class="text-[13px] text-main font-medium truncate">{{ authStore.user?.username }}</p>
+                  <p class="text-[11px] text-mute mt-0.5">
                     {{ uploading ? '上传中...' : '点击头像更换' }}
                   </p>
                 </div>
@@ -158,15 +166,15 @@ function avatarBgColor(): string {
             <div class="space-y-5">
               <!-- Theme -->
               <div>
-                <label class="text-[11px] text-white/30 uppercase tracking-[0.12em] font-medium mb-2.5 block">外观主题</label>
-                <div class="flex gap-1.5 bg-white/5 ring-1 ring-white/10 rounded-lg p-1">
+                <label class="text-[11px] text-mute uppercase tracking-[0.12em] font-medium mb-2.5 block">外观主题</label>
+                <div class="flex gap-1.5 bg-glass-fill rounded-lg p-1">
                   <button
                     v-for="t in themes"
                     :key="t.value"
                     class="flex-1 py-2 text-[12px] rounded-md transition-all duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
                     :class="currentTheme === t.value
-                      ? 'bg-white/10 text-white ring-1 ring-white/10 shadow-[0_2px_8px_rgba(0,0,0,0.3)]'
-                      : 'text-white/40 hover:text-white/60'"
+                      ? 'bg-accent/15 text-accent ring-1 ring-accent/40 font-medium'
+                      : 'text-mute hover:text-soft'"
                     @click="updateTheme(t.value)"
                   >
                     <span class="mr-1">{{ t.icon }}</span>{{ t.label }}
@@ -177,12 +185,12 @@ function avatarBgColor(): string {
               <!-- Font Size -->
               <div>
                 <div class="flex items-center justify-between mb-2.5">
-                  <label class="text-[11px] text-white/30 uppercase tracking-[0.12em] font-medium">字号大小</label>
-                  <span class="text-[12px] text-white/60 tabular-nums font-medium">{{ authStore.user?.font_size || 14 }}px</span>
+                  <label class="text-[11px] text-mute uppercase tracking-[0.12em] font-medium">字号大小</label>
+                  <span class="text-[12px] text-soft tabular-nums font-medium">{{ authStore.user?.font_size || 14 }}px</span>
                 </div>
-                <div class="relative h-1.5 bg-white/10 rounded-full">
+                <div class="relative h-1.5 bg-glass-fill rounded-full">
                   <div
-                    class="absolute left-0 top-0 h-full bg-white/20 rounded-full transition-all duration-200"
+                    class="absolute left-0 top-0 h-full bg-accent/50 rounded-full transition-all duration-200"
                     :style="{ width: `${((authStore.user?.font_size || 14) - 12) / 8 * 100}%` }"
                   ></div>
                   <input
@@ -195,13 +203,12 @@ function avatarBgColor(): string {
                   />
                 </div>
                 <div class="flex justify-between mt-1.5">
-                  <span class="text-[10px] text-white/20">12</span>
-                  <span class="text-[10px] text-white/20">20</span>
+                  <span class="text-[10px] text-mute">12</span>
+                  <span class="text-[10px] text-mute">20</span>
                 </div>
               </div>
             </div>
 
-          </div>
         </div>
       </Transition>
     </div>
