@@ -4,7 +4,7 @@ import { callLLM, extractFirstJsonObject, stripMarkdownCodeFence } from '../llm-
 import { MODEL_STRONG } from '../llm-config'
 import { loadPrompt, renderPrompt } from '../prompt-loader'
 import { buildDateContext } from '../knowledge'
-import { parsePlan, formatStageResults, type StageResult, type PneChatMessage } from './types'
+import { parsePlan, formatStageResults, type ExecutionPlan, type StageResult, type PneChatMessage } from './types'
 
 const PLANNER_MAX_TOKENS = 2000
 
