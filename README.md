@@ -5,6 +5,7 @@
 ## 功能特性
 
 - **查询分类路由** - 规则 + LLM 兜底，将查询分流到 5 条路径（CHITCHAT/KNOWLEDGE/CALCULATION/SEARCH/COMPLEX），按路径选模型、过滤工具
+- **PnE (Plan-and-Execute) 二级分流** - COMPLEX 路径内的混合架构：gate 判定（deep 强制/长度/信号词/LLM 兜底）→ Planner 拆解 JSON 计划 → 拓扑调度并行执行各阶段 → Evaluator 判定 continue/achieved/replan/stuck（上限 2 次 replan）→ Synthesizer 流式汇总；异常自动回退 ReAct，前端实时渲染「执行计划」todo（阶段状态 ⏳/✓/⊘）
 - **多模型调度** - 轻量模型（`deepseek-ai/DeepSeek-V4-Flash`）处理简单路径，强模型（`zai-org/GLM-5.2`）处理复杂路径
 - **复杂度覆盖** - 前端 `fast/medium/deep` 三档覆盖分类结果，`fast` 强制轻量、`deep` 强制 COMPLEX
 - **长期记忆系统** - 两层架构：已提升 Rules 全量注入 system prompt（全局上下文，不走向量检索）+ 未提升 Candidates 向量检索 top-3（按 query 相关性，ES BM25+kNN+rerank）；会话级 Episode 提取 → Candidate 候选 → 规则提升（跨会话/失败教训/显式标记）
@@ -86,6 +87,8 @@
 │                   │   ├─ classifyQuery (规则+LLM)                │
 │                   │   ├─ filterTools (白名单)                    │
 │                   │   └─ 5 路径分发 (见下文)                      │
+│                   │   └─ runComplex 二级分流 → services/pne/      │
+│                   │       (PnE: Plan-and-Execute, 见 §1 PnE 小节) │
 │                   ├─ langchain-adapter.langchainAgentRunner()     │
 │                   │     (LangGraph stream → AgentEvent)           │
 │                   ├─ llm-caller.streamLLM / callLLM               │
@@ -265,6 +268,14 @@ agent/
 │       │   ├── langchain-adapter.ts  # LangGraph stream → AgentEvent + 停止检测
 │       │   ├── llm-caller.ts         # streamLLM / callLLM 通用调用
 │       │   ├── llm-config.ts         # 模型/API 共享配置（避免循环依赖）
+│       │   ├── pne/                  # PnE (Plan-and-Execute) 二级分流管线
+│       │   │   ├── gate.ts           # shouldUsePne 二级分流判定
+│       │   │   ├── planner.ts        # 计划生成 (callLLM + JSON 提取 + parsePlan)
+│       │   │   ├── executor.ts       # 阶段执行 (ChatOpenAI.bindTools 手写 mini 循环)
+│       │   │   ├── evaluator.ts      # 计划评估 (continue/achieved/replan/stuck)
+│       │   │   ├── synthesizer.ts    # 流式汇总 (streamLLM)
+│       │   │   ├── run.ts            # runPneAgent 编排 (拓扑调度 + replan)
+│       │   │   └── types.ts          # Stage/ExecutionPlan/StageResult/PneDecision
 │       │   ├── knowledge.ts          # 内置知识 + 动态日期上下文
 │       │   ├── tool-adapter.ts       # 内置 Tool → DynamicStructuredTool 包装
 │       │   ├── memory-extractor.ts   # 会话 → episode + candidates
@@ -348,13 +359,15 @@ flowchart TD
 | KNOWLEDGE | MODEL_LIGHT | 无 | `streamLLM` + 内置知识，不足时回退 SEARCH | - | "2026中秋几号" |
 | CALCULATION | MODEL_LIGHT | `calculator` | `createReactAgent` | 10 | "根号5加根号9" |
 | SEARCH | MODEL_LIGHT | `search` `fetch` `browser_*` | `createReactAgent` | 50 | "后天世界杯赛程" |
-| COMPLEX | MODEL_STRONG | 全部 | `createReactAgent` | 50 | "规划13天西藏行程" |
+| COMPLEX | MODEL_STRONG | 全部 | `shouldUsePne` 二级分流 → PnE 管线或 `createReactAgent` | 50 (PnE: 见 §2.5) | "规划13天西藏行程" |
 
 **工具过滤规则**（`filterTools`）：
 - `null` → 返回全部工具（COMPLEX）
 - `[]` → 返回空数组（CHITCHAT/KNOWLEDGE）
 - `['calculator']` → 精确匹配
 - `['browser_*']` → 正则前缀匹配
+
+**PnE 二级分流**（COMPLEX 路径内）：`runComplex` 头部调用 `shouldUsePne(query, complexity)`（`services/pne/gate.ts`），命中则走 PnE 管线，未命中或 PnE 异常时回退 ReAct。详见下文「PnE Plan-and-Execute 流程」。
 
 ### 2. Agent ReAct 循环流程
 
@@ -396,6 +409,60 @@ flowchart TD
 - `checkSearchEffectiveness`：搜索类工具（search/fetch/browser_*）总调用 > 25 次，或同一 `tool:input` 重复 ≥ 2 次
 - `recursionLimit`：50 super-steps（≈ 25 次实际工具调用，每轮 = 推理 + 工具执行 = 2 步）
 - 兜底：工具已执行但无 answer → 汇总最近 3 条有效 observation 作为 content
+
+### 2.5 PnE (Plan-and-Execute) 流程
+
+复杂查询在 COMPLEX 路径内先由强模型拆解为带依赖的多阶段计划，再按拓扑序并行执行，评估器决定继续/提前完成/重规划/卡死，最后流式汇总。
+
+```mermaid
+flowchart TD
+    A[runComplex COMPLEX 路径] --> B{shouldUsePne 二级分流<br/>gate.ts}
+    B -- deep 强制 --> C[走 PnE]
+    B -- 长度>120 或信号词<br/>对比/分析/方案/规划/步骤/制定/策划/评估 --> C
+    B -- LLM 兜底 20 token --> C
+    B -- 未命中/失败 --> R1[回退 ReAct 循环]
+
+    C --> D[Planner: MODEL_STRONG<br/>拆解 JSON 计划<br/>stage: goal/strategy/dependsOn]
+    D --> E[runPneAgent 编排<br/>findReadyStages 拓扑调度]
+
+    E --> F[批次并行执行<br/>Promise.all + Executor<br/>bindTools 手写 mini 循环<br/>3 轮工具上限]
+    F --> G[yield plan 快照帧<br/>+ 各阶段 thought/action/observation]
+    G --> H[Evaluator: MODEL_LIGHT<br/>continue/achieved/replan/stuck]
+    H -- continue --> I{还有 ready 阶段?}
+    I -- 是 --> F
+    I -- 否 --> J{replanCount <= 2?}
+    J -- 是 --> D2[Planner 重新规划<br/>携带已完成结果]
+    D2 --> E
+    J -- 否 --> K[强制汇总]
+    H -- achieved --> L[剩余 pending 阶段标 skipped<br/>提前完成]
+    H -- stuck --> K
+    L --> S
+    K --> S
+    I -- 批完成且计划走完 --> H2[下一轮评估]
+    H2 --> I
+    S[Synthesizer: MODEL_STRONG<br/>streamLLM 流式汇总] --> T[yield content_delta<br/>→ done 恒为最后事件]
+
+    C -. 异常且未发过内容 .-> R1
+    C -. 已发过内容后异常 .-> U[thought + done, 不回退]
+```
+
+**二级分流 gate**（`services/pne/gate.ts` `shouldUsePne`）——规则前置 + LLM 兜底分层：
+
+| 优先级 | 条件 | 说明 |
+|--------|------|------|
+| 1 | `complexity=deep` | 强制走 PnE（前端 deep 档） |
+| 2 | 查询长度 > 120 字符 | 长问题大概率多阶段 |
+| 3 | 信号词正则 | `/(对比\|分析\|方案\|规划\|步骤\|制定\|策划\|评估)/` |
+| 4 | LLM 兜底 | 20 token 判定，返回 `/yes/i` 才走；失败视为否 |
+
+**核心约束**：
+- `MAX_STAGES=5`（计划阶段数上限）、`MAX_REPLAN=2`（重规划上限，第 3 个 replan 决策强制汇总）、`MAX_TOOL_ROUNDS=3`（单阶段工具轮数上限）
+- 连续 3 次工具失败终止该阶段；observation 4000 字截断
+- 并行批次事件缓冲到批末按序回放（生成器无法跨 `Promise.all` 流式交错）；阶段内流式不变
+- **回退语义**：PnE 异常且尚未发送 content → 回退 ReAct 一次（PnE 的 thought/plan 帧保留，可观察）；已发内容后异常 → thought + done 结束，不回退
+- done 事件恒由 Synthesizer 路径发出，`runPneAgent` 自身不 yield done
+
+**进度可视化与持久化**：新增 `plan`（计划快照，stages 数组）与 `evaluation`（decision + reason）两种 SSE 事件，前端思考区渲染「执行计划」todo（状态图标 ⏳执行中/✓完成/⊘跳过 + 依赖标注 + outcome）。持久化采用方案 A：plan 帧以 `{type: 'plan', content: JSON.stringify(stages)}` 写入 `thought_steps`，零 DB 迁移，刷新后历史消息回放完成态；渲染层 `groupThoughtSteps` 做 JSON.parse + 形状 guard，非法数据降级为 note。
 
 ### 3. SSE 流式输出流程
 
@@ -441,6 +508,8 @@ sequenceDiagram
 | `thought` | `{content}` | 完整思考摘要（替换最后一个 thought step） |
 | `action` | `{tool_name, content}` | 工具调用 |
 | `observation` | `{content}` | 工具执行结果 |
+| `plan` | `{stages}` | PnE 计划快照（stages: index/goal/strategy/status/dependsOn/outcome?） |
+| `evaluation` | `{decision, reason}` | PnE 计划评估（continue/achieved/replan/stuck） |
 | `content_delta` | `{content}` | 最终回答片段（打字机效果） |
 | `content` | `{content}` | 完整回答内容（兜底汇总） |
 | `warning` | `{content}` | 事实核查失败警告（不覆盖回答，前端黄色警告条） |
@@ -788,6 +857,10 @@ MCP 工具在服务启动时动态发现并注册，与内置工具并存。`cal
 18. **孤儿对话认领** - `user_id IS NULL` 的对话对所有用户可见，首次访问时 `claimOrphan` 归属当前用户
 19. **admin 只读他人会话** - admin 查看其他用户会话时隐藏输入框（`showInput` 计算属性）
 20. **🚨 删库保护** - 禁止 DROP TABLE/DATABASE、删除 .db 文件、空数据覆盖；迁移只能 ADD COLUMN / CREATE TABLE IF NOT EXISTS
+21. **PnE 二级分流** - gate 规则前置（零延迟零成本）+ LLM 兜底（20 token，失败视为否）；未命中回退 ReAct；`runComplex` 头部一次判定，gate 是纯函数不维护状态
+22. **PnE 快照持久化（方案 A）** - plan/evaluation 以 thought_steps JSON 字符串存 DB（`{type: 'plan', content: JSON.stringify(stages)}`），零 DB 迁移；渲染侧 `groupThoughtSteps` JSON.parse + 形状 guard 双重防御，畸形数据降级 note 不崩溃
+23. **PnE 并行批次事件缓冲** - 同批各阶段事件缓冲到批末按序回放（生成器无法跨 `Promise.all` 流式交错），阶段内流式、批间并行真实；done 恒由 Synthesizer 路径发出
+24. **PnE 回退残留可观察** - gate 命中但 PnE 异常回退 ReAct 时，PnE 已发的 thought/plan 帧保留在前端轨迹中（设计行为）；排查分流先看 thought【分流】帧
 
 ## Tailwind 主题色值（暗色，Ethereal Glass）
 
