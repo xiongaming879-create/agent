@@ -3,6 +3,8 @@
  * 独立此文件避免 agent.ts <-> query-router.ts 循环依赖。
  */
 
+import { ChatOpenAI } from '@langchain/openai'
+
 export const LLM_API_KEY = process.env.SILICONFLOW_API_KEY
   || process.env.SILICONFLOW_DEEPSEEK_V4_FLASH
   || process.env.SILICONFLOW_GLM_52
@@ -23,3 +25,14 @@ export const MODEL = process.env.AGENT_MODEL || MODEL_LIGHT
 export type QueryCategory = 'CHITCHAT' | 'KNOWLEDGE' | 'CALCULATION' | 'SEARCH' | 'COMPLEX'
 
 export type Complexity = 'fast' | 'medium' | 'deep'
+
+/** 统一构造 ChatOpenAI（与 query-router createAgent 同款配置），供 PnE Executor 直接 tool-calling */
+export function createChatOpenAI(model: string): ChatOpenAI {
+  return new ChatOpenAI({
+    model,
+    apiKey: LLM_API_KEY,
+    configuration: { baseURL: `${LLM_BASE_URL}/v1` },
+    temperature: 0,
+    maxTokens: 4096,
+  })
+}

@@ -18,7 +18,21 @@ export interface ThoughtNote {
   content: string
 }
 
-export type ThoughtItem = ThoughtRound | ThoughtNote
+export interface PlanStageView {
+  index: number
+  goal: string
+  strategy: string
+  status: 'pending' | 'running' | 'done' | 'skipped'
+  dependsOn: number[]
+  outcome?: string
+}
+
+export interface ThoughtPlan {
+  kind: 'plan'
+  stages: PlanStageView[]
+}
+
+export type ThoughtItem = ThoughtRound | ThoughtNote | ThoughtPlan
 
 /**
  * 扁平 thought_steps → 时间线条目。
@@ -56,6 +70,14 @@ export function groupThoughtSteps(steps: ThoughtStep[]): ThoughtItem[] {
       }
       items.push(round)
       openRounds.push(round)
+    } else if (step.type === 'plan') {
+      try {
+        items.push({ kind: 'plan', stages: JSON.parse(step.content) as PlanStageView[] })
+      } catch {
+        items.push({ kind: 'note', content: step.content })
+      }
+    } else if (step.type === 'evaluation') {
+      items.push({ kind: 'note', content: step.content })
     } else if (step.type === 'observation') {
       let round: ThoughtRound | undefined
       if (step.call_id) {

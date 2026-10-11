@@ -60,6 +60,16 @@ function processAgentStream(
             timestamp: new Date().toISOString(), call_id: event.call_id ?? null,
             duration_ms: event.duration_ms, success: event.success,
           })
+        } else if (event.type === 'plan') {
+          thoughtSteps.push({
+            type: 'plan', content: JSON.stringify(event.stages), tool_name: null,
+            timestamp: new Date().toISOString(),
+          })
+        } else if (event.type === 'evaluation') {
+          thoughtSteps.push({
+            type: 'evaluation', content: `【计划评估】${event.decision}: ${event.reason}`, tool_name: null,
+            timestamp: new Date().toISOString(),
+          })
         } else if (event.type === 'content_delta') {
           fullContent += event.content
         } else if (event.type === 'content') {

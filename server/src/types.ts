@@ -9,7 +9,7 @@ export interface Conversation {
 }
 
 export interface ThoughtStep {
-  type: 'thought' | 'action' | 'observation'
+  type: 'thought' | 'action' | 'observation' | 'plan' | 'evaluation'
   content: string
   tool_name: string | null
   timestamp: string
@@ -28,6 +28,15 @@ export interface Message {
   created_at: string
 }
 
+export interface PlanStageSnapshot {
+  index: number
+  goal: string
+  strategy: string
+  status: 'pending' | 'running' | 'done' | 'skipped'
+  dependsOn: number[]
+  outcome?: string
+}
+
 export type AgentEvent =
   | { type: 'thought'; content: string }
   | { type: 'thought_delta'; content: string }
@@ -36,6 +45,8 @@ export type AgentEvent =
   | { type: 'content'; content: string }
   | { type: 'content_delta'; content: string }
   | { type: 'warning'; content: string }
+  | { type: 'plan'; stages: PlanStageSnapshot[] }
+  | { type: 'evaluation'; decision: 'continue' | 'achieved' | 'replan' | 'stuck'; reason: string }
   | { type: 'done' }
 
 export interface User {

@@ -136,6 +136,16 @@ export const useMessageStore = defineStore('message', () => {
         msg.thought_steps = [...thoughtSteps]
         break
 
+      case 'plan':
+        thoughtSteps.push({ type: 'plan', content: JSON.stringify(event.stages), tool_name: null, timestamp: new Date().toISOString() })
+        msg.thought_steps = [...thoughtSteps]
+        break
+
+      case 'evaluation':
+        thoughtSteps.push({ type: 'evaluation', content: `【计划评估】${event.decision}: ${event.reason}`, tool_name: null, timestamp: new Date().toISOString() })
+        msg.thought_steps = [...thoughtSteps]
+        break
+
       case 'content_delta':
       case 'content': {
         const state = typewriters.get(convId)

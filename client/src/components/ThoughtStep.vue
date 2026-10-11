@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
-import type { ThoughtItem, ThoughtRound } from '../utils/thoughtGroup'
+import type { ThoughtItem, ThoughtRound, PlanStageView } from '../utils/thoughtGroup'
 import {
   parseSearchResults, parseKnowledgeResults, parseParallelSections,
   parseJsonKV, parseInputJson, hostOf,
@@ -92,6 +92,33 @@ const renders = computed(() => props.items.map((item) => {
 function needsExpand(text: string, threshold: number): boolean {
   return text.length > threshold || text.includes('\n')
 }
+
+function planStatusIcon(status: PlanStageView['status']): string {
+  if (status === 'done') return '✓'
+  if (status === 'running') return '⏳'
+  if (status === 'skipped') return '⊘'
+  return '○'
+}
+
+function planStatusClass(status: PlanStageView['status']): string {
+  if (status === 'done') return 'text-emerald-400'
+  if (status === 'running') return 'text-amber-400'
+  return 'text-neutral-600'
+}
+
+const PLAN_STATUSES: readonly string[] = ['pending', 'running', 'done', 'skipped']
+
+function validPlanStages(stages: PlanStageView[]): PlanStageView[] {
+  if (!Array.isArray(stages)) return []
+  return stages.filter((s) =>
+    typeof s === 'object' && s !== null &&
+    typeof s.index === 'number' &&
+    typeof s.goal === 'string' &&
+    PLAN_STATUSES.includes(s.status) &&
+    Array.isArray(s.dependsOn)
+  )
+}
+
 </script>
 
 <template>
@@ -107,6 +134,30 @@ function needsExpand(text: string, threshold: number): boolean {
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
           <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
         </svg>
+      </div>
+
+      <!-- 执行计划 todo -->
+      <div
+        v-else-if="item.kind === 'plan'"
+        class="rounded-md border border-neutral-800 bg-neutral-900/40 px-2.5 py-2 space-y-1"
+      >
+        <div class="text-neutral-500 text-[11px] font-medium">执行计划</div>
+        <template v-if="validPlanStages(item.stages).length">
+          <div
+            v-for="s in validPlanStages(item.stages)"
+            :key="s.index"
+            class="flex items-center gap-1.5 text-[12px] leading-relaxed"
+          >
+            <span class="shrink-0 w-4 text-center text-[11px]" :class="planStatusClass(s.status)">{{ planStatusIcon(s.status) }}</span>
+            <span
+              class="text-neutral-300 break-all"
+              :class="s.status === 'skipped' ? 'line-through text-neutral-600' : ''"
+            >{{ s.index }}. {{ s.goal }}</span>
+            <span v-if="s.dependsOn.length" class="shrink-0 text-neutral-600 text-[11px]">依赖 {{ s.dependsOn.join(',') }}</span>
+            <span v-if="s.outcome" class="text-neutral-500 text-[11px] truncate ml-auto shrink">{{ s.outcome }}</span>
+          </div>
+        </template>
+        <div v-else class="text-neutral-600 text-[11px] italic">(计划数据无效)</div>
       </div>
 
       <!-- 工具调用 pill -->
