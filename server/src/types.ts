@@ -9,7 +9,7 @@ export interface Conversation {
 }
 
 export interface ThoughtStep {
-  type: 'thought' | 'action' | 'observation' | 'plan'
+  type: 'thought' | 'action' | 'observation' | 'plan' | 'evaluation'
   content: string
   tool_name: string | null
   timestamp: string

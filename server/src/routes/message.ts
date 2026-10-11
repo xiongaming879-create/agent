@@ -67,7 +67,7 @@ function processAgentStream(
           })
         } else if (event.type === 'evaluation') {
           thoughtSteps.push({
-            type: 'thought', content: `【计划评估】${event.decision}: ${event.reason}`, tool_name: null,
+            type: 'evaluation', content: `【计划评估】${event.decision}: ${event.reason}`, tool_name: null,
             timestamp: new Date().toISOString(),
           })
         } else if (event.type === 'content_delta') {
