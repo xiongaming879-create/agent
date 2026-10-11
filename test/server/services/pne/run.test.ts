@@ -118,8 +118,9 @@ describe('runPneAgent', () => {
     const events = await collect()
 
     const plans1 = events.filter(e => e.type === 'plan')
-    // 初始快照 + running/done 快照x2 + achieved 快照 >= 4
+    // 初始快照 + 批次 running/done 快照x2 = 5；achieved 后无 pending 可 skip、快照未变不再发帧
     expect(plans1.length).toBeGreaterThanOrEqual(4)
+    expect(plans1.length).toBe(5)
     expect(events.some(e => e.type === 'action' && (e as { call_id?: string }).call_id === 'c1')).toBe(true)
     expect(events.filter(e => e.type === 'evaluation')).toHaveLength(2)
     expect(events.at(-1)).toMatchObject({ type: 'done' })
@@ -133,9 +134,9 @@ describe('runPneAgent', () => {
     plans.push(planOf([{ index: 1 }, { index: 2 }]))
     decisions.push({ decision: 'achieved', reason: '够' })
     const events = await collect()
-    // 两个 action 都发出（同批），4 帧：initial + running + done + achieved 后（无 pending 可 skip，快照内容不变）
+    // 两个 action 都发出（同批），3 帧：initial + running + done（achieved 后无变化不再发帧）
     const planFrames = events.filter(e => e.type === 'plan')
-    expect(planFrames.length).toBe(4)
+    expect(planFrames.length).toBe(3)
     expect(events.filter(e => e.type === 'action')).toHaveLength(2)
   })
 

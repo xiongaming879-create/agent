@@ -34,7 +34,7 @@ function snapshot(
   stageResults: StageResult[]
 ): PlanStageSnapshot[] {
   return plan.stages.map(s => {
-    const result = stageResults.find(r => r.index === s.index)
+    const result = stageResults.find(r => r.index === s.index && r.goal === s.goal)
     return {
       index: s.index,
       goal: s.goal,
@@ -64,13 +64,24 @@ export async function* runPneAgent(
   const logCtx = { conversationId: options.conversationId, userId: options.userId }
 
   const stageResults: StageResult[] = []
+  let lastPlanFrame = ''
+  const yieldPlanFrame = function* (
+    plan: ExecutionPlan,
+    statuses: Map<number, StageStatus>
+  ): Generator<AgentEvent> {
+    const stages = snapshot(plan, statuses, stageResults)
+    const json = JSON.stringify(stages)
+    if (json === lastPlanFrame) return
+    lastPlanFrame = json
+    yield { type: 'plan', stages }
+  }
   let replanCount = 0
 
   try {
     while (true) {
       const plan = yield* planQuery(query, stageResults, messages, toolList)
       const statuses = new Map<number, StageStatus>(plan.stages.map(s => [s.index, 'pending' as const]))
-      yield { type: 'plan', stages: snapshot(plan, statuses, stageResults) }
+      yield* yieldPlanFrame(plan, statuses)
 
       let decision: PneDecision = 'continue'
       let deadlock = false
@@ -82,14 +93,14 @@ export async function* runPneAgent(
           if (pending.length > 0) {
             deadlock = true
             for (const s of pending) statuses.set(s.index, 'skipped')
-            yield { type: 'plan', stages: snapshot(plan, statuses, stageResults) }
+            yield* yieldPlanFrame(plan, statuses)
             yield { type: 'thought', content: `【计划】${pending.length} 个阶段存在未满足的依赖，跳过` }
           }
           break
         }
 
         for (const s of ready) statuses.set(s.index, 'running')
-        yield { type: 'plan', stages: snapshot(plan, statuses, stageResults) }
+        yield* yieldPlanFrame(plan, statuses)
 
         // 无依赖阶段同批并行；事件缓冲到批次结束统一回放
         const batch = await Promise.all(
@@ -110,7 +121,7 @@ export async function* runPneAgent(
           statuses.set(ready[i].index, 'done')
           stageResults.push({ index: ready[i].index, goal: ready[i].goal, outcome: batch[i].outcome })
         }
-        yield { type: 'plan', stages: snapshot(plan, statuses, stageResults) }
+        yield* yieldPlanFrame(plan, statuses)
 
         const evaluation = await evaluateProgress(query, plan, stageResults)
         yield { type: 'evaluation', decision: evaluation.decision, reason: evaluation.reason }
@@ -124,7 +135,7 @@ export async function* runPneAgent(
           for (const s of plan.stages) {
             if (statuses.get(s.index) === 'pending') statuses.set(s.index, 'skipped')
           }
-          yield { type: 'plan', stages: snapshot(plan, statuses, stageResults) }
+          yield* yieldPlanFrame(plan, statuses)
         }
         break
       }
