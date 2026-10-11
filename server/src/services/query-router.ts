@@ -19,6 +19,9 @@ import { langchainAgentRunner } from './langchain-adapter'
 import { logQueryClassified } from './logger'
 import { loadPrompt, renderPrompt } from './prompt-loader'
 import { tools as allTools, lcTools } from '../tools'
+import { shouldUsePne } from './pne/gate'
+import { runPneAgent } from './pne/run'
+import type { PneChatMessage } from './pne/types'
 
 interface ChatMessage {
   role: 'user' | 'assistant' | 'system'
@@ -316,6 +319,33 @@ async function* runSearch(messages: ChatMessage[], options: AgentOptions): Async
 
 async function* runComplex(messages: ChatMessage[], options: AgentOptions): AsyncGenerator<AgentEvent> {
   const query = getLastUserQuery(messages)
+
+  // PnE 二级分流（spec D1/D4）：判定/执行全程异常回退 ReAct；已输出正文后不再回退
+  if (await shouldUsePne(query, options.complexity ?? 'medium')) {
+    yield { type: 'thought', content: '【分流】多阶段任务，启用 Plan-and-Execute' }
+    let hasContent = false
+    try {
+      for await (const event of runPneAgent(messages as PneChatMessage[], {
+        systemPrompt: options.systemPrompt,
+        complexity: options.complexity,
+        userId: options.userId,
+        conversationId: options.conversationId,
+      })) {
+        if (event.type === 'content_delta' || event.type === 'content') hasContent = true
+        yield event
+      }
+      return
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      if (hasContent) {
+        yield { type: 'thought', content: `【PnE】执行中断（${errMsg}），已输出的内容保留` }
+        yield { type: 'done' }
+        return
+      }
+      yield { type: 'thought', content: `【PnE】执行失败（${errMsg}），回退 ReAct 重试` }
+    }
+  }
+
   const memoryContext = await buildMemoryContext(options.userId, query)
   const allLcTools = getAllLcTools()
   const toolList = buildToolListFromLcTools(allLcTools)
